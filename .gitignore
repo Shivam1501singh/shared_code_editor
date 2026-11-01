@@ -17,6 +17,11 @@ server/.env
 frontend/.env
 frontend/.env.local
 
+# Documentation & spec files (kept local only)
+*.md
+frontend/**/*.md
+server/**/*.md
+
 # Debug logs
 npm-debug.log*
 yarn-debug.log*
