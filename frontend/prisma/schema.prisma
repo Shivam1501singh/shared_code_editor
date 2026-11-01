@@ -1,0 +1,105 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// -------------------------------------------------------------
+// NEXTAUTH MODELS
+// -------------------------------------------------------------
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model User {
+  id            String         @id @default(cuid())
+  name          String?
+  email         String?        @unique
+  emailVerified DateTime?
+  image         String?
+  accounts      Account[]
+  sessions      Session[]
+  hostedRooms   Room[]         @relation("RoomHost")
+  roomMembers   RoomMember[]
+  snapshots     CodeSnapshot[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+}
+
+// -------------------------------------------------------------
+// APPLICATION MODELS
+// -------------------------------------------------------------
+
+model Room {
+  id          String         @id @default(cuid())
+  roomKey     String         @unique
+  title       String         @default("Untitled Room")
+  language    String         @default("javascript")
+  codeContent String         @db.Text @default("// Start coding collaboratively here...\nconsole.log('Hello, SynCode World!');")
+  hostId      String
+  host        User           @relation("RoomHost", fields: [hostId], references: [id], onDelete: Cascade)
+  members     RoomMember[]
+  snapshots   CodeSnapshot[]
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@index([roomKey])
+  @@index([hostId])
+}
+
+model RoomMember {
+  id           String   @id @default(cuid())
+  roomId       String
+  userId       String
+  role         String   @default("collaborator") // "host", "collaborator"
+  joinedAt     DateTime @default(now())
+  lastActiveAt DateTime @default(now())
+  room         Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([roomId, userId])
+  @@index([userId])
+  @@index([roomId])
+}
+
+model CodeSnapshot {
+  id          String   @id @default(cuid())
+  roomId      String
+  savedById   String?
+  codeContent String   @db.Text
+  note        String?
+  createdAt   DateTime @default(now())
+  room        Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  savedBy     User?    @relation(fields: [savedById], references: [id], onDelete: SetNull)
+
+  @@index([roomId])
+}

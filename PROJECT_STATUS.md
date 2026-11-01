@@ -123,8 +123,8 @@
 | Phase | Description | Status |
 | :---: | :--- | :---: |
 | **0** | **Design Ingestion & Planning** | `COMPLETED` |
-| **1** | **Scaffolding & Architecture Setup** | `IN PROGRESS` |
-| **2** | **Authentication & Database (NextAuth + Prisma)** | `NOT STARTED` |
+| **1** | **Scaffolding & Architecture Setup** | `COMPLETED` |
+| **2** | **Authentication & Database (NextAuth + Prisma)** | `READY TO START` |
 | **3** | **Landing Page & User Dashboard** | `NOT STARTED` |
 | **4** | **Collaborative Editor (Monaco + Socket.io)** | `NOT STARTED` |
 | **5** | **In-Room WebRTC Voice Communication** | `NOT STARTED` |
