@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>SynCode — Distraction-Free Collaborative Editor</title>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;1,400&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script>
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+          colors: {
+            brand: {
+              500: '#6366f1',
+              400: '#818cf8',
+            }
+          }
+        }
+      }
+    };
+  </script>
+<style>
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0; }
+    }
+    .caret-blink {
+      animation: blink 1s ease-in-out infinite;
+    }
+    /* Custom scrollbar */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #0a0e17;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #1e293b;
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #334155;
+    }
+  </style>
+</head>
+<body class="bg-[#0a0e17] text-slate-100 font-sans antialiased overflow-hidden select-none h-screen flex flex-col">
+<!-- 1. SLIM HIGH-CRAFT TOP HEADER (Dark Graphite #0b0f19) -->
+<header class="h-13 py-2.5 px-4 bg-[#0b0f19] border-b border-slate-800/80 flex items-center justify-between gap-4 z-40 shrink-0">
+<!-- Left Section: Branding, File/Problem, Room Key -->
+<div class="flex items-center gap-3 min-w-0">
+<!-- SynCode Logo -->
+<div class="flex items-center gap-2 pr-1">
+<div class="w-7 h-7 rounded-lg bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-400 shadow-[0_0_12px_rgba(99,102,241,0.25)]">
+<span class="material-symbols-outlined text-[17px] font-bold">bolt</span>
+</div>
+<span class="font-bold text-[15px] tracking-tight text-white flex items-center gap-1 font-sans">
+          SynCode
+        </span>
+</div>
+<!-- Subtle Vertical Divider -->
+<div class="w-px h-4 bg-slate-800 hidden sm:block"></div>
+<!-- Editable Title -->
+<div class="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-900/60 hover:bg-slate-800/70 border border-slate-800/60 transition-colors group cursor-pointer text-slate-200">
+<span class="text-xs md:text-sm font-medium tracking-tight truncate max-w-[150px] md:max-w-none">LeetCode: Two Sum</span>
+<span class="material-symbols-outlined text-slate-500 text-[14px] group-hover:text-slate-300 transition-colors">edit</span>
+</div>
+<!-- Room Key Badge Pill with Copy Link Action -->
+<div class="relative flex items-center bg-slate-900/80 border border-slate-800/80 rounded-full px-2.5 py-0.5 text-xs">
+<div class="flex items-center gap-1.5 text-slate-400">
+<span class="w-1.5 h-1.5 rounded-full bg-indigo-400/80"></span>
+<span class="font-mono text-[11px] text-indigo-300 font-medium">code-8f2a1b</span>
+</div>
+<div class="w-px h-3 bg-slate-800 mx-2"></div>
+<button class="flex items-center gap-1 text-[11px] text-slate-400 hover:text-white transition-colors" onclick="copyRoomLink()" title="Copy invitation link">
+<span class="material-symbols-outlined text-[13px]">content_copy</span>
+<span class="hidden md:inline font-sans">Copy Link</span>
+</button>
+<!-- Mini Toast -->
+<span class="absolute -bottom-8 left-1/2 -translate-x-1/2 bg-slate-800 text-slate-200 border border-slate-700 font-sans text-[11px] px-2 py-0.5 rounded shadow-xl hidden whitespace-nowrap z-50" id="copy-toast">
+          Copied to clipboard!
+        </span>
+</div>
+</div>
+<!-- Right Section: Collaboration & Actions -->
+<div class="flex items-center gap-2.5 shrink-0">
+<!-- Active Voice Indicator Pill -->
+<div class="flex items-center gap-2 pl-1.5 pr-2 py-1 rounded-full bg-slate-900/90 border border-slate-800/90 shadow-sm">
+<!-- Avatars Stack -->
+<div class="flex items-center -space-x-1.5">
+<!-- Local User Avatar: SS -->
+<div class="w-6 h-6 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center font-mono text-[10px] text-slate-300 font-semibold" title="Shivam Singh (You)">
+            SS
+          </div>
+<!-- Alex with glowing emerald border ring -->
+<div class="relative w-6 h-6 rounded-full bg-emerald-950 border-2 border-emerald-400 flex items-center justify-center font-mono text-[10px] text-emerald-300 font-bold shadow-[0_0_8px_rgba(52,211,153,0.35)]" title="Alex">
+            AL
+          </div>
+</div>
+<!-- Speaking wave and text -->
+<div class="hidden lg:flex items-center gap-1.5 text-xs">
+<span class="text-emerald-400 font-medium text-[11px]">Alex speaking</span>
+<!-- Dynamic audio wave -->
+<div class="flex items-end gap-0.5 h-3">
+<span class="w-0.5 h-1.5 bg-emerald-400 rounded-full animate-pulse"></span>
+<span class="w-0.5 h-3 bg-emerald-400 rounded-full animate-bounce"></span>
+<span class="w-0.5 h-2 bg-emerald-400 rounded-full animate-pulse"></span>
+</div>
+</div>
+<!-- Mic Toggle Button -->
+<button class="w-5 h-5 ml-0.5 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white flex items-center justify-center transition-all" id="mic-btn" onclick="toggleMute()" title="Toggle microphone">
+<span class="material-symbols-outlined text-[13px]" id="mic-icon">mic</span>
+</button>
+</div>
+<!-- AI Review Button (Violet/Indigo Gradient Border) -->
+<button class="relative group p-[1px] rounded-full bg-gradient-to-r from-violet-500/60 via-indigo-500/60 to-purple-500/60 hover:from-violet-500 hover:to-indigo-500 transition-all duration-200 shadow-sm active:scale-95" onclick="toggleAiModal()" type="button">
+<div class="flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#0b0f19] group-hover:bg-[#111726] transition-colors">
+<span class="material-symbols-outlined text-[14px] text-violet-400 group-hover:rotate-12 transition-transform">auto_awesome</span>
+<span class="text-xs font-medium text-slate-200 group-hover:text-white tracking-tight">AI Review</span>
+<span class="text-[10px] text-violet-400 font-mono">✨</span>
+</div>
+</button>
+<!-- Run Button: High-Contrast Emerald Green -->
+<button class="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 active:bg-emerald-600 text-slate-950 font-semibold text-xs transition-all shadow-[0_0_14px_rgba(16,185,129,0.25)] active:scale-95" onclick="executeCode()" type="button">
+<span class="material-symbols-outlined text-[15px]" style="font-variation-settings: 'FILL' 1;">play_arrow</span>
+<span class="tracking-wide">Run</span>
+<span class="hidden sm:inline-block px-1 py-0.2 rounded bg-slate-950/20 text-slate-900 font-mono text-[9px] font-medium border border-slate-950/10">Ctrl + Enter</span>
+</button>
+<!-- User Profile Avatar -->
+<div class="w-7 h-7 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 p-[1.5px] cursor-pointer hover:ring-2 hover:ring-indigo-400/40 transition-all" title="Shivam Singh (You)">
+<div class="w-full h-full rounded-full bg-slate-900 flex items-center justify-center font-mono text-[10px] text-indigo-300 font-bold">
+          SS
+        </div>
+</div>
+</div>
+</header>
+<!-- 2. CENTRAL CODE EDITOR CANVAS (Primary Focus, ~75% viewport height) -->
+<main class="relative flex-1 flex flex-col bg-[#0a0e17] overflow-hidden">
+<!-- Editor Tab Strip (Minimal Single File) -->
+<div class="h-9 px-4 bg-[#090d16] border-b border-slate-800/60 flex items-center justify-between text-xs font-mono select-none shrink-0">
+<!-- Active File Tab -->
+<div class="flex items-center gap-2 h-full border-b-2 border-indigo-400 px-1 text-slate-200 font-medium">
+<span class="w-3.5 h-3.5 rounded bg-amber-400 text-slate-950 font-bold text-[9px] flex items-center justify-center font-sans shadow-sm leading-none">JS</span>
+<span>solution.js</span>
+</div>
+<!-- File Telemetry -->
+<div class="flex items-center gap-3 text-slate-500 text-[11px]">
+<span>UTF-8</span>
+<span class="text-slate-700">•</span>
+<span>Spaces: 2</span>
+<span class="text-slate-700">•</span>
+<span class="flex items-center gap-1 text-emerald-400/90">
+<span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+          Synced
+        </span>
+</div>
+</div>
+<!-- Code Editor Viewport: Gutter + Code Body -->
+<div class="relative flex-1 overflow-y-auto overflow-x-auto flex font-mono text-[13px] leading-[22px] py-3.5 select-text">
+<!-- Line Numbers Gutter (Lines 1 to 22) -->
+<div class="select-none text-right pr-4 pl-4 text-slate-600 border-r border-slate-800/60 font-mono text-[13px] leading-[22px] shrink-0 min-w-[3.5rem] space-y-0">
+<div>1</div>
+<div>2</div>
+<div>3</div>
+<div>4</div>
+<div>5</div>
+<div>6</div>
+<div>7</div>
+<div>8</div>
+<div>9</div>
+<div>10</div>
+<div>11</div>
+<div class="text-cyan-400/90 font-medium">12</div>
+<div>13</div>
+<div>14</div>
+<div class="text-slate-200 font-medium">15</div>
+<div>16</div>
+<div>17</div>
+<div>18</div>
+<div>19</div>
+<div>20</div>
+<div>21</div>
+<div>22</div>
+<div>23</div>
+<div>24</div>
+</div>
+<!-- Syntax-Highlighted Code Body -->
+<div class="flex-1 pl-4 pr-6 min-w-[580px] whitespace-pre">
+<!-- Line 1 -->
+<div class="text-slate-500 italic">/**</div>
+<!-- Line 2 -->
+<div class="text-slate-500 italic"> * <span class="text-purple-400 not-italic">@param</span> <span class="text-sky-300 not-italic">{number[]}</span> nums</div>
+<!-- Line 3 -->
+<div class="text-slate-500 italic"> * <span class="text-purple-400 not-italic">@param</span> <span class="text-sky-300 not-italic">{number}</span> target</div>
+<!-- Line 4 -->
+<div class="text-slate-500 italic"> * <span class="text-purple-400 not-italic">@return</span> <span class="text-sky-300 not-italic">{number[]}</span></div>
+<!-- Line 5 -->
+<div class="text-slate-500 italic"> */</div>
+<!-- Line 6 -->
+<div><span class="text-purple-400 font-medium">function</span> <span class="text-sky-300 font-medium">twoSum</span>(<span class="text-slate-200">nums</span>, <span class="text-slate-200">target</span>) {</div>
+<!-- Line 7 -->
+<div> <span class="text-purple-400 font-medium">const</span> <span class="text-slate-200">map</span> = <span class="text-purple-400 font-medium">new</span> <span class="text-sky-200">Map</span>();</div>
+<!-- Line 8 -->
+<div class="h-[22px]"></div>
+<!-- Line 9 -->
+<div> <span class="text-purple-400 font-medium">for</span> (<span class="text-purple-400 font-medium">let</span> <span class="text-slate-200">i</span> = <span class="text-amber-300">0</span>; <span class="text-slate-200">i</span> &lt; <span class="text-slate-200">nums</span>.<span class="text-sky-300">length</span>; <span class="text-slate-200">i</span>++) {</div>
+<!-- Line 10 -->
+<div> <span class="text-purple-400 font-medium">const</span> <span class="text-slate-200">complement</span> = <span class="text-slate-200">target</span> - <span class="text-slate-200">nums</span>[<span class="text-slate-200">i</span>];</div>
+<!-- Line 11 -->
+<div class="h-[22px]"></div>
+<!-- Line 12 (Peer Cursor Line: Alex) -->
+<div class="relative bg-cyan-500/5 -mx-2 px-2 rounded">
+<span> <span class="text-purple-400 font-medium">if</span> (<span class="text-slate-200">map</span>.<span class="text-sky-300">has</span>(<span class="text-slate-200">complement</span>)) {</span>
+</div>
+<!-- Line 13 (Alex's cursor active on return statement) -->
+<div class="relative inline-flex items-center">
+<span> <span class="text-purple-400 font-medium">return</span> [<span class="text-slate-200">map</span>.<span class="text-sky-300">get</span>(<span class="text-slate-200">complement</span>), <span class="text-slate-200">i</span>];</span>
+<!-- REAL-TIME COLLABORATIVE REMOTE CURSOR: ALEX -->
+<span class="relative inline-flex items-center ml-0.5">
+<span class="w-[2px] h-5 bg-cyan-400 inline-block align-middle shadow-[0_0_8px_rgba(34,211,238,0.8)]"></span>
+<!-- Floating Pill Badge Hovering Right Above -->
+<span class="absolute bottom-full left-0 mb-1 -translate-x-1/4 flex items-center gap-1 bg-cyan-500 text-slate-950 font-sans font-semibold text-[10px] px-1.5 py-0.5 rounded shadow-lg tracking-tight whitespace-nowrap z-20 pointer-events-none select-none">
+<span class="material-symbols-outlined text-[10px]" style="font-variation-settings: 'FILL' 1;">edit</span>
+              Alex
+              <span class="absolute top-full left-3 -mt-[3px] border-[3px] border-transparent border-t-cyan-500"></span>
+</span>
+</span>
+</div>
+<!-- Line 14 -->
+<div>    }</div>
+<!-- Line 15 (Local Peer Cursor: Shivam) -->
+<div class="relative inline-flex items-center">
+<span> <span class="text-slate-200">map</span>.<span class="text-sky-300">set</span>(<span class="text-slate-200">nums</span>[<span class="text-slate-200">i</span>], <span class="text-slate-200">i</span>);</span>
+<!-- LOCAL BLINKING WHITE CARET -->
+<span class="w-[2px] h-5 bg-white inline-block align-middle ml-0.5 caret-blink shadow-[0_0_6px_rgba(255,255,255,0.7)]"></span>
+</div>
+<!-- Line 16 -->
+<div>  }</div>
+<!-- Line 17 -->
+<div class="h-[22px]"></div>
+<!-- Line 18 -->
+<div> <span class="text-purple-400 font-medium">return</span> [];</div>
+<!-- Line 19 -->
+<div>}</div>
+<!-- Line 20 -->
+<div class="h-[22px]"></div>
+<!-- Line 21 -->
+<div class="text-slate-500 italic">// Test case execution</div>
+<!-- Line 22 -->
+<div><span class="text-purple-400 font-medium">const</span> <span class="text-slate-200">nums</span> = [<span class="text-amber-300">2</span>, <span class="text-amber-300">7</span>, <span class="text-amber-300">11</span>, <span class="text-amber-300">15</span>];</div>
+<!-- Line 23 -->
+<div><span class="text-purple-400 font-medium">const</span> <span class="text-slate-200">target</span> = <span class="text-amber-300">9</span>;</div>
+<!-- Line 24 -->
+<div><span class="text-slate-200">console</span>.<span class="text-sky-300">log</span>(<span class="text-emerald-400">"Output:"</span>, <span class="text-sky-300">twoSum</span>(<span class="text-slate-200">nums</span>, <span class="text-slate-200">target</span>));</div>
+</div>
+</div>
+<!-- Contextual AI Review Modal (Triggered by AI Review Button) -->
+<aside class="absolute top-0 right-0 bottom-0 w-[420px] max-w-[85vw] bg-[#0d121f]/95 backdrop-blur-md border-l border-slate-800 shadow-2xl z-40 flex flex-col font-sans transition-all duration-300" id="ai-review-modal">
+<!-- Gradient Ambient Top Accent Line -->
+<div class="h-[2px] w-full bg-gradient-to-r from-violet-500 via-indigo-500 to-cyan-400 shrink-0"></div>
+<!-- Drawer Header -->
+<div class="p-4 border-b border-slate-800/80 flex items-start justify-between gap-3 bg-[#0a0e17]/60 shrink-0">
+<div class="space-y-1">
+<div class="flex items-center gap-2">
+<div class="w-6 h-6 rounded-lg bg-gradient-to-br from-violet-500/20 to-cyan-500/20 border border-violet-500/30 flex items-center justify-center text-cyan-400 shadow-sm">
+<span class="material-symbols-outlined text-[15px]">auto_awesome</span>
+</div>
+<h2 class="font-semibold text-sm tracking-tight text-white flex items-center gap-1.5">
+          Gemini Code Review
+          <span class="text-[10px] px-1.5 py-0.2 rounded-full bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 font-mono">1.5 Flash</span>
+</h2>
+</div>
+<div class="flex items-center gap-1.5 text-[11px] text-slate-400 pl-0.5">
+<span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+<span>Analysis completed in 0.4s via Google Gemini</span>
+</div>
+</div>
+<button class="w-7 h-7 rounded-lg hover:bg-slate-800 flex items-center justify-center text-slate-400 hover:text-slate-200 transition-colors" onclick="toggleAiModal()" title="Close review">
+<span class="material-symbols-outlined text-[18px]">close</span>
+</button>
+</div>
+<!-- Drawer Body Scrollable Feed -->
+<div class="flex-1 overflow-y-auto p-4 space-y-4 text-xs">
+<!-- Big-O Complexity Badges -->
+<div>
+<span class="text-[11px] font-semibold tracking-wider text-slate-400 uppercase font-mono">Complexity Analysis</span>
+<div class="grid grid-cols-2 gap-2.5 mt-2">
+<!-- Time Complexity Card -->
+<div class="p-3 rounded-lg bg-emerald-950/20 border border-emerald-500/30 flex flex-col justify-between space-y-1 shadow-sm">
+<div class="flex items-center justify-between">
+<span class="text-[11px] text-slate-400 font-medium font-sans">Time</span>
+<span class="px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-400 font-mono font-bold text-[11px]">O(n)</span>
+</div>
+<p class="text-[10px] text-slate-300 leading-normal font-sans pt-0.5">Single-pass hash table lookup</p>
+</div>
+<!-- Space Complexity Card -->
+<div class="p-3 rounded-lg bg-cyan-500/5 border border-cyan-500/30 flex flex-col justify-between space-y-1 shadow-sm">
+<div class="flex items-center justify-between">
+<span class="text-[11px] text-slate-400 font-medium font-sans">Space</span>
+<span class="px-1.5 py-0.2 rounded bg-cyan-500/20 text-cyan-400 font-mono font-bold text-[11px]">O(n)</span>
+</div>
+<p class="text-[10px] text-slate-300 leading-normal font-sans pt-0.5">Map storage for n elements</p>
+</div>
+</div>
+</div>
+<!-- Detected Issues & Warnings -->
+<div class="p-3 rounded-lg bg-amber-400/10 border border-amber-400/30 space-y-1.5">
+<div class="flex items-center gap-1.5 text-amber-300 font-medium text-[11px]">
+<span class="material-symbols-outlined text-[15px]">warning</span>
+<span>Edge Case Warning</span>
+</div>
+<p class="text-[11px] text-slate-300 leading-relaxed font-sans">
+        Line 4: Potential edge case. If target sum is not found, function returns <code class="font-mono text-amber-300 bg-slate-900/80 px-1 py-0.5 rounded text-[10px]">undefined</code> implicitly.
+      </p>
+</div>
+<!-- Optimization & Suggested Refactoring -->
+<div class="space-y-2">
+<div class="flex items-center justify-between">
+<span class="text-[11px] font-semibold tracking-wider text-slate-400 uppercase font-mono">Optimized Implementation</span>
+<span class="text-[10px] text-indigo-400 font-mono flex items-center gap-1">
+<span class="material-symbols-outlined text-[12px]">bolt</span> ES6 Diff
+        </span>
+</div>
+<div class="rounded-lg bg-[#080c14] border border-slate-800 p-3 font-mono text-[11px] leading-[18px] overflow-x-auto text-slate-300 shadow-inner select-text">
+<div><span class="text-purple-400 font-medium">function</span> <span class="text-sky-300 font-medium">twoSum</span>(<span class="text-slate-200">nums</span>, <span class="text-slate-200">target</span>) {</div>
+<div> <span class="text-purple-400 font-medium">const</span> <span class="text-slate-200">map</span> = <span class="text-purple-400 font-medium">new</span> <span class="text-sky-200">Map</span>();</div>
+<div> <span class="text-purple-400 font-medium">for</span> (<span class="text-purple-400 font-medium">let</span> <span class="text-slate-200">i</span> = <span class="text-amber-300">0</span>; <span class="text-slate-200">i</span> &lt; <span class="text-slate-200">nums</span>.<span class="text-sky-300">length</span>; <span class="text-slate-200">i</span>++) {</div>
+<div> <span class="text-purple-400 font-medium">const</span> <span class="text-slate-200">diff</span> = <span class="text-slate-200">target</span> - <span class="text-slate-200">nums</span>[<span class="text-slate-200">i</span>];</div>
+<div> <span class="text-purple-400 font-medium">if</span> (<span class="text-slate-200">map</span>.<span class="text-sky-300">has</span>(<span class="text-slate-200">diff</span>)) <span class="text-purple-400 font-medium">return</span> [<span class="text-slate-200">map</span>.<span class="text-sky-300">get</span>(<span class="text-slate-200">diff</span>), <span class="text-slate-200">i</span>];</div>
+<div> <span class="text-slate-200">map</span>.<span class="text-sky-300">set</span>(<span class="text-slate-200">nums</span>[<span class="text-slate-200">i</span>], <span class="text-slate-200">i</span>);</div>
+<div>  }</div>
+<div> <span class="text-purple-400 font-medium">return</span> []; <span class="text-slate-500 italic">// Explicit fallback</span></div>
+<div>}</div>
+</div>
+</div>
+</div>
+<!-- Action Footer -->
+<div class="p-4 border-t border-slate-800/80 bg-[#0a0e17]/80 shrink-0 space-y-2.5">
+<button class="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg bg-gradient-to-r from-violet-500 via-indigo-500 to-cyan-500 hover:from-violet-400 hover:to-cyan-400 text-white font-medium text-xs transition-all shadow-md active:scale-95" onclick="toggleAiModal()" type="button">
+<span class="material-symbols-outlined text-[15px]">auto_awesome</span>
+<span>Apply to Editor</span>
+</button>
+<p class="text-[10px] text-center text-slate-500 font-sans">
+      Syncs live to Alex's editor via CRDT
+    </p>
+</div>
+</aside>
+</main>
+<!-- 3. MINIMALIST COLLAPSIBLE OUTPUT PANEL (Bottom ~25% height) -->
+<footer class="w-full bg-[#080c14] border-t border-slate-800/80 flex flex-col z-30 transition-all duration-200 shrink-0" id="output-panel">
+<!-- Header Bar -->
+<div class="h-9 px-4 bg-[#090d16] flex items-center justify-between text-xs font-mono select-none border-b border-slate-800/50">
+<!-- Left: Terminal title & idle badge -->
+<div class="flex items-center gap-2 cursor-pointer" onclick="toggleOutputCollapse()">
+<span class="text-slate-400 font-mono text-[13px] font-semibold">&gt;_</span>
+<span class="font-sans font-medium text-slate-200 text-xs">Console Output</span>
+<span class="flex items-center gap-1 text-[11px] text-emerald-400 bg-emerald-950/60 border border-emerald-800/40 px-1.5 py-0.2 rounded-full font-sans ml-1">
+<span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+          idle
+        </span>
+</div>
+<!-- Right: Performance Telemetry & Controls -->
+<div class="flex items-center gap-4 text-slate-400 text-[11px]">
+<div class="hidden sm:flex items-center gap-3">
+<span>Exec: <span class="text-slate-200">12ms</span></span>
+<span class="text-slate-700">|</span>
+<span>Mem: <span class="text-slate-200">1.4 MB</span></span>
+</div>
+<div class="flex items-center gap-1.5 border-l border-slate-800 pl-3">
+<button class="w-6 h-6 rounded hover:bg-slate-800 flex items-center justify-center text-slate-400 hover:text-slate-200 transition-colors" onclick="clearConsole()" title="Clear console">
+<span class="material-symbols-outlined text-[15px]">delete_sweep</span>
+</button>
+<button class="w-6 h-6 rounded hover:bg-slate-800 flex items-center justify-center text-slate-400 hover:text-slate-200 transition-colors" onclick="toggleOutputCollapse()" title="Collapse / Expand">
+<span class="material-symbols-outlined text-[16px]" id="collapse-icon">expand_more</span>
+</button>
+</div>
+</div>
+</div>
+<!-- Console Body Feed -->
+<div class="p-4 font-mono text-xs md:text-sm leading-relaxed space-y-1.5 bg-[#080c14] overflow-y-auto max-h-44 min-h-[7rem]" id="console-feed">
+<div class="text-slate-400 flex items-center gap-2">
+<span class="text-slate-600 select-none">&gt;</span>
+<span>[Running JavaScript v20.11.0 on WebAssembly V8 isolate...]</span>
+</div>
+<div class="text-slate-400 flex items-center gap-2">
+<span class="text-slate-600 select-none">&gt;</span>
+<span>Compiling syntax tree... Success (0 errors, 0 warnings)</span>
+</div>
+<div class="text-emerald-400 font-bold flex items-center gap-2 bg-emerald-950/20 py-0.5 px-2 rounded -mx-2 border-l-2 border-emerald-400">
+<span class="text-emerald-500 select-none">&gt;</span>
+<span>Output: [0, 1]</span>
+</div>
+<div class="text-emerald-400/90 flex items-center gap-1.5 pt-0.5 font-medium">
+<span class="text-emerald-400 font-bold">✓</span>
+<span>All test assertions passed (target = 9, indices = [0, 1])</span>
+</div>
+<!-- Blinking command prompt -->
+<div class="text-slate-500 flex items-center gap-1.5 pt-1">
+<span class="text-slate-400 select-none">&gt;</span>
+<span class="w-2 h-4 bg-slate-400/80 caret-blink inline-block"></span>
+</div>
+</div>
+</footer>
+<!-- Interactivity Scripts -->
+<script>
+    function copyRoomLink() {
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText("https://syncode.dev/code-8f2a1b");
+      }
+      const toast = document.getElementById("copy-toast");
+      if (toast) {
+        toast.classList.remove("hidden");
+        setTimeout(() => toast.classList.add("hidden"), 1800);
+      }
+    }
+
+    let isMuted = false;
+    function toggleMute() {
+      isMuted = !isMuted;
+      const icon = document.getElementById("mic-icon");
+      const btn = document.getElementById("mic-btn");
+      if (isMuted) {
+        icon.innerText = "mic_off";
+        btn.classList.add("bg-rose-950", "text-rose-400", "hover:bg-rose-900");
+        btn.classList.remove("bg-slate-800", "text-slate-300");
+      } else {
+        icon.innerText = "mic";
+        btn.classList.remove("bg-rose-950", "text-rose-400", "hover:bg-rose-900");
+        btn.classList.add("bg-slate-800", "text-slate-300");
+      }
+    }
+
+    function toggleAiModal() {
+      const modal = document.getElementById("ai-review-modal");
+      if (modal) {
+        modal.classList.toggle("hidden");
+      }
+    }
+
+    let isOutputCollapsed = false;
+    function toggleOutputCollapse() {
+      const feed = document.getElementById("console-feed");
+      const icon = document.getElementById("collapse-icon");
+      if (isOutputCollapsed) {
+        feed.classList.remove("hidden");
+        icon.innerText = "expand_more";
+        isOutputCollapsed = false;
+      } else {
+        feed.classList.add("hidden");
+        icon.innerText = "expand_less";
+        isOutputCollapsed = true;
+      }
+    }
+
+    function clearConsole() {
+      const feed = document.getElementById("console-feed");
+      if (feed) {
+        feed.innerHTML = `
+          <div class="text-slate-500 italic text-xs">&gt; Console buffer cleared.</div>
+          <div class="text-slate-500 flex items-center gap-1.5 pt-1">
+            <span class="text-slate-400 select-none">&gt;</span>
+            <span class="w-2 h-4 bg-slate-400/80 caret-blink inline-block"></span>
+          </div>
+        `;
+      }
+    }
+
+    function executeCode() {
+      const feed = document.getElementById("console-feed");
+      if (isOutputCollapsed) toggleOutputCollapse();
+      if (feed) {
+        const time = new Date().toLocaleTimeString();
+        const runBlock = document.createElement("div");
+        runBlock.innerHTML = `
+          <div class="text-slate-600 text-[11px] pt-1.5 border-t border-slate-800/80 select-none">-- Executed at ${time} --</div>
+          <div class="text-emerald-400 font-bold flex items-center gap-2 bg-emerald-950/20 py-0.5 px-2 rounded -mx-2 border-l-2 border-emerald-400">
+            <span class="text-emerald-500 select-none">&gt;</span>
+            <span>Output: [0, 1]</span>
+          </div>
+          <div class="text-emerald-400/90 flex items-center gap-1.5 pt-0.5 font-medium">
+            <span class="text-emerald-400 font-bold">✓</span>
+            <span>All test assertions passed (target = 9, indices = [0, 1])</span>
+          </div>
+        `;
+        feed.insertBefore(runBlock, feed.lastElementChild);
+        feed.scrollTop = feed.scrollHeight;
+      }
+    }
+
+    // Ctrl + Enter to run
+    window.addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        e.preventDefault();
+        executeCode();
+      }
+    });
+  </script>
+</body></html>
