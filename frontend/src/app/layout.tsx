@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import AuthProvider from '@/components/providers/AuthProvider';
 
 export const metadata: Metadata = {
   title: 'SynCode — Real-Time Collaborative Code Editor with Voice & Gemini AI',
@@ -26,7 +27,7 @@ export default function RootLayout({
         />
       </head>
       <body className="antialiased bg-[#0f131d] text-[#dfe2f1] min-h-screen">
-        {children}
+        <AuthProvider>{children}</AuthProvider>
       </body>
     </html>
   );
