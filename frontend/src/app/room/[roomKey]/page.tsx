@@ -3,9 +3,10 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import { useSession } from 'next-auth/react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams } from 'next/navigation';
 import { io, Socket } from 'socket.io-client';
 import Link from 'next/link';
+import { WebRTCVoiceManager } from '@/lib/webrtc';
 
 // Dynamically import Monaco Editor to avoid SSR window issues
 const Editor = dynamic(() => import('@monaco-editor/react'), { ssr: false });
@@ -18,9 +19,21 @@ interface Participant {
   socketId: string;
 }
 
+interface AIAnalysis {
+  timeComplexity: string;
+  spaceComplexity: string;
+  complexityExplanation: string;
+  errors: Array<{
+    line?: number;
+    severity: 'error' | 'warning' | 'info';
+    message: string;
+  }>;
+  optimizationTips: string[];
+  optimizedCode: string;
+}
+
 export default function CollaborativeRoomPage() {
   const params = useParams();
-  const router = useRouter();
   const roomKey = params?.roomKey as string;
   const { data: session } = useSession();
 
@@ -29,9 +42,11 @@ export default function CollaborativeRoomPage() {
   const [activeUsers, setActiveUsers] = useState<Participant[]>([]);
   const [socketConnected, setSocketConnected] = useState(false);
 
-  // Audio / Voice state
+  // WebRTC Voice State
+  const [isVoiceActive, setIsVoiceActive] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
-  const [activeSpeaker, setActiveSpeaker] = useState<string | null>(null);
+  const [isLocalSpeaking, setIsLocalSpeaking] = useState(false);
+  const [activeSpeakerSocketId, setActiveSpeakerSocketId] = useState<string | null>(null);
 
   // Output terminal state
   const [outputLogs, setOutputLogs] = useState<Array<{ type: 'log' | 'error' | 'info'; text: string }>>([
@@ -41,11 +56,16 @@ export default function CollaborativeRoomPage() {
   const [execTime, setExecTime] = useState<string>('0ms');
   const [isOutputCollapsed, setIsOutputCollapsed] = useState(false);
 
-  // AI Review Drawer state (Phase 7 preview)
+  // Gemini AI Review state
   const [isAiDrawerOpen, setIsAiDrawerOpen] = useState(false);
+  const [isAiLoading, setIsAiLoading] = useState(false);
+  const [aiData, setAiData] = useState<AIAnalysis | null>(null);
+  const [aiError, setAiError] = useState<string | null>(null);
+
   const [copyToast, setCopyToast] = useState(false);
 
   const socketRef = useRef<Socket | null>(null);
+  const voiceManagerRef = useRef<WebRTCVoiceManager | null>(null);
   const editorRef = useRef<any>(null);
   const isRemoteUpdateRef = useRef<boolean>(false);
 
@@ -69,7 +89,7 @@ export default function CollaborativeRoomPage() {
     fetchRoom();
   }, [roomKey]);
 
-  // Socket.io initialization & event listeners
+  // Socket.io initialization & WebRTC Voice
   useEffect(() => {
     if (!roomKey) return;
 
@@ -79,6 +99,17 @@ export default function CollaborativeRoomPage() {
       withCredentials: true,
     });
     socketRef.current = socket;
+
+    // Initialize WebRTC Voice Manager
+    const voiceManager = new WebRTCVoiceManager(socket, roomKey, {
+      onSpeakingChange: (speaking) => {
+        setIsLocalSpeaking(speaking);
+      },
+      onRemoteSpeakingChange: (socketId, speaking) => {
+        setActiveSpeakerSocketId(speaking ? socketId : null);
+      },
+    });
+    voiceManagerRef.current = voiceManager;
 
     socket.on('connect', () => {
       setSocketConnected(true);
@@ -118,11 +149,7 @@ export default function CollaborativeRoomPage() {
     });
 
     socket.on('voice:speaking', ({ socketId, isSpeaking }) => {
-      if (isSpeaking) {
-        setActiveSpeaker(socketId);
-      } else {
-        setActiveSpeaker((prev) => (prev === socketId ? null : prev));
-      }
+      setActiveSpeakerSocketId(isSpeaking ? socketId : null);
     });
 
     socket.on('disconnect', () => {
@@ -130,6 +157,7 @@ export default function CollaborativeRoomPage() {
     });
 
     return () => {
+      voiceManager.destroy();
       socket.disconnect();
     };
   }, [roomKey, session]);
@@ -147,13 +175,27 @@ export default function CollaborativeRoomPage() {
     }
   };
 
+  // Start or Join WebRTC Audio
+  const toggleVoiceChannel = async () => {
+    if (!voiceManagerRef.current) return;
+    if (!isVoiceActive) {
+      const ok = await voiceManagerRef.current.startAudio();
+      if (ok) {
+        setIsVoiceActive(true);
+        setIsMuted(false);
+      }
+    } else {
+      const muted = voiceManagerRef.current.toggleMute();
+      setIsMuted(muted);
+    }
+  };
+
   // Safe client-side JavaScript execution
   const executeCode = useCallback(() => {
     setIsExecuting(true);
     const startTime = performance.now();
     const logs: Array<{ type: 'log' | 'error' | 'info'; text: string }> = [];
 
-    // Capture console outputs
     const originalLog = console.log;
     const originalError = console.error;
     const originalWarn = console.warn;
@@ -178,7 +220,6 @@ export default function CollaborativeRoomPage() {
         });
       };
 
-      // Run code safely via isolated Function constructor
       const runner = new Function(code);
       runner();
 
@@ -210,6 +251,43 @@ export default function CollaborativeRoomPage() {
     }
   }, [code]);
 
+  // Request AI Code Review from Google Gemini API
+  const runAiReview = async () => {
+    try {
+      setIsAiLoading(true);
+      setAiError(null);
+      setIsAiDrawerOpen(true);
+
+      const res = await fetch('/api/ai/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, language: 'javascript' }),
+      });
+
+      const json = await res.json();
+      if (res.ok && json.success) {
+        setAiData(json.data);
+      } else {
+        setAiError(json.error || 'Failed to complete AI review');
+      }
+    } catch (err: any) {
+      setAiError('Network error connecting to Gemini API');
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+
+  // 1-Click apply optimized code to Monaco and broadcast to all peers
+  const applyOptimizedCode = () => {
+    if (!aiData?.optimizedCode) return;
+    const newCode = aiData.optimizedCode;
+    setCode(newCode);
+    if (socketRef.current && socketConnected) {
+      socketRef.current.emit('code:update', { roomKey, codeContent: newCode });
+    }
+    setIsAiDrawerOpen(false);
+  };
+
   // Keyboard shortcut: Ctrl + Enter / Cmd + Enter
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -228,10 +306,6 @@ export default function CollaborativeRoomPage() {
       setCopyToast(true);
       setTimeout(() => setCopyToast(false), 2000);
     }
-  };
-
-  const toggleMute = () => {
-    setIsMuted((prev) => !prev);
   };
 
   const clearConsole = () => {
@@ -283,40 +357,65 @@ export default function CollaborativeRoomPage() {
           </div>
         </div>
 
-        {/* Right Section: Active Peers, Voice Pill, Actions */}
+        {/* Right Section: Active Peers, Voice Controls, Actions */}
         <div className="flex items-center gap-2.5 shrink-0">
           {/* Active Voice Pill */}
           <div className="flex items-center gap-2 pl-1.5 pr-2 py-1 rounded-full bg-slate-900/90 border border-slate-800/90 shadow-sm">
             <div className="flex items-center -space-x-1.5">
-              {activeUsers.map((user, idx) => (
-                <div
-                  key={user.socketId || idx}
-                  className={`w-6 h-6 rounded-full flex items-center justify-center font-mono text-[10px] font-semibold border ${
-                    activeSpeaker === user.socketId
-                      ? 'border-emerald-400 bg-emerald-950 text-emerald-300 ring-2 ring-emerald-400/40'
-                      : 'border-slate-700 bg-slate-800 text-slate-300'
-                  }`}
-                  title={user.name}
-                >
-                  {user.name.substring(0, 2).toUpperCase()}
-                </div>
-              ))}
+              {activeUsers.map((user, idx) => {
+                const isSpeaking = activeSpeakerSocketId === user.socketId;
+                return (
+                  <div
+                    key={user.socketId || idx}
+                    className={`w-6 h-6 rounded-full flex items-center justify-center font-mono text-[10px] font-semibold border transition-all ${
+                      isSpeaking
+                        ? 'border-emerald-400 bg-emerald-950 text-emerald-300 ring-2 ring-emerald-400/50 shadow-[0_0_8px_#10b981]'
+                        : 'border-slate-700 bg-slate-800 text-slate-300'
+                    }`}
+                    title={user.name}
+                  >
+                    {user.name.substring(0, 2).toUpperCase()}
+                  </div>
+                );
+              })}
             </div>
 
+            {/* Speaking Audio Wave Animation */}
+            {(isLocalSpeaking || activeSpeakerSocketId) && (
+              <div className="hidden lg:flex items-center gap-0.5 h-3">
+                <span className="w-0.5 h-1.5 bg-emerald-400 rounded-full animate-pulse"></span>
+                <span className="w-0.5 h-3 bg-emerald-400 rounded-full animate-bounce"></span>
+                <span className="w-0.5 h-2 bg-emerald-400 rounded-full animate-pulse"></span>
+              </div>
+            )}
+
+            {/* Mic Toggle Button */}
             <button
-              onClick={toggleMute}
+              onClick={toggleVoiceChannel}
               className={`w-5 h-5 rounded-full flex items-center justify-center transition-all ${
-                isMuted ? 'bg-rose-950 text-rose-400' : 'bg-slate-800 hover:bg-slate-700 text-slate-300'
+                !isVoiceActive
+                  ? 'bg-slate-800 hover:bg-slate-700 text-slate-400'
+                  : isMuted
+                  ? 'bg-rose-950 text-rose-400 hover:bg-rose-900'
+                  : 'bg-emerald-950 text-emerald-400 hover:bg-emerald-900'
               }`}
-              title={isMuted ? 'Unmute microphone' : 'Mute microphone'}
+              title={
+                !isVoiceActive
+                  ? 'Click to enable WebRTC Voice Call'
+                  : isMuted
+                  ? 'Microphone muted (Click to unmute)'
+                  : 'Microphone active (Click to mute)'
+              }
             >
-              <span className="material-symbols-outlined text-[13px]">{isMuted ? 'mic_off' : 'mic'}</span>
+              <span className="material-symbols-outlined text-[13px]">
+                {!isVoiceActive ? 'mic_none' : isMuted ? 'mic_off' : 'mic'}
+              </span>
             </button>
           </div>
 
           {/* AI Review Drawer Button */}
           <button
-            onClick={() => setIsAiDrawerOpen((prev) => !prev)}
+            onClick={runAiReview}
             className="p-[1px] rounded-full bg-gradient-to-r from-violet-500/60 via-indigo-500/60 to-purple-500/60 hover:from-violet-500 hover:to-indigo-500 transition-all duration-200 active:scale-95"
             type="button"
           >
@@ -393,7 +492,7 @@ export default function CollaborativeRoomPage() {
           />
         </div>
 
-        {/* Slide-over AI Review Drawer */}
+        {/* Slide-over AI Review Drawer (Stitch Page 4) */}
         {isAiDrawerOpen && (
           <aside className="absolute top-0 right-0 bottom-0 w-[420px] max-w-[85vw] bg-[#0d121f]/95 backdrop-blur-md border-l border-slate-800 shadow-2xl z-40 flex flex-col font-sans transition-all duration-300">
             <div className="h-[2px] w-full bg-gradient-to-r from-violet-500 via-indigo-500 to-cyan-400 shrink-0" />
@@ -412,7 +511,7 @@ export default function CollaborativeRoomPage() {
                 </div>
                 <div className="flex items-center gap-1.5 text-[11px] text-slate-400 pl-0.5">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                  <span>Ready to analyze algorithm complexity</span>
+                  <span>Google AI Studio Powered</span>
                 </div>
               </div>
               <button
@@ -425,47 +524,100 @@ export default function CollaborativeRoomPage() {
             </div>
 
             <div className="flex-1 overflow-y-auto p-4 space-y-4 text-xs">
-              <div>
-                <span className="text-[11px] font-semibold tracking-wider text-slate-400 uppercase font-mono">
-                  Complexity Analysis
-                </span>
-                <div className="grid grid-cols-2 gap-2.5 mt-2">
-                  <div className="p-3 rounded-lg bg-emerald-950/20 border border-emerald-500/30 flex flex-col justify-between space-y-1 shadow-sm">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] text-slate-400 font-medium font-sans">Time</span>
-                      <span className="px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-400 font-mono font-bold text-[11px]">
-                        O(n)
-                      </span>
-                    </div>
-                    <p className="text-[10px] text-slate-300 leading-normal font-sans pt-0.5">
-                      Single pass linear algorithm
-                    </p>
-                  </div>
-                  <div className="p-3 rounded-lg bg-cyan-500/5 border border-cyan-500/30 flex flex-col justify-between space-y-1 shadow-sm">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] text-slate-400 font-medium font-sans">Space</span>
-                      <span className="px-1.5 py-0.2 rounded bg-cyan-500/20 text-cyan-400 font-mono font-bold text-[11px]">
-                        O(1)
-                      </span>
-                    </div>
-                    <p className="text-[10px] text-slate-300 leading-normal font-sans pt-0.5">
-                      Constant auxiliary space
-                    </p>
-                  </div>
+              {isAiLoading ? (
+                <div className="flex flex-col items-center justify-center py-16 gap-3 text-slate-400 font-mono text-xs">
+                  <span className="material-symbols-outlined animate-spin text-[28px] text-cyan-400">progress_activity</span>
+                  <span>Analyzing AST & Big-O complexity...</span>
                 </div>
-              </div>
+              ) : aiError ? (
+                <div className="p-3.5 rounded-lg bg-rose-950/30 border border-rose-500/40 text-rose-300 text-xs">
+                  <div className="flex items-center gap-1.5 font-medium mb-1">
+                    <span className="material-symbols-outlined text-[16px]">error</span>
+                    <span>Analysis Error</span>
+                  </div>
+                  <p>{aiError}</p>
+                </div>
+              ) : aiData ? (
+                <>
+                  {/* Big-O Complexity Badges */}
+                  <div>
+                    <span className="text-[11px] font-semibold tracking-wider text-slate-400 uppercase font-mono">
+                      Complexity Analysis
+                    </span>
+                    <div className="grid grid-cols-2 gap-2.5 mt-2">
+                      <div className="p-3 rounded-lg bg-emerald-950/20 border border-emerald-500/30 flex flex-col justify-between space-y-1 shadow-sm">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] text-slate-400 font-medium font-sans">Time</span>
+                          <span className="px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-400 font-mono font-bold text-[11px]">
+                            {aiData.timeComplexity}
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-slate-300 leading-normal font-sans pt-0.5">
+                          {aiData.complexityExplanation}
+                        </p>
+                      </div>
+
+                      <div className="p-3 rounded-lg bg-cyan-500/5 border border-cyan-500/30 flex flex-col justify-between space-y-1 shadow-sm">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] text-slate-400 font-medium font-sans">Space</span>
+                          <span className="px-1.5 py-0.2 rounded bg-cyan-500/20 text-cyan-400 font-mono font-bold text-[11px]">
+                            {aiData.spaceComplexity}
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-slate-300 leading-normal font-sans pt-0.5">
+                          Auxiliary storage bounds
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Detected Issues & Warnings */}
+                  {aiData.errors && aiData.errors.length > 0 && (
+                    <div className="p-3 rounded-lg bg-amber-400/10 border border-amber-400/30 space-y-1.5">
+                      <div className="flex items-center gap-1.5 text-amber-300 font-medium text-[11px]">
+                        <span className="material-symbols-outlined text-[15px]">warning</span>
+                        <span>Potential Edge Cases & Issues</span>
+                      </div>
+                      {aiData.errors.map((e, idx) => (
+                        <p key={idx} className="text-[11px] text-slate-300 leading-relaxed font-sans">
+                          {e.line ? `Line ${e.line}: ` : ''}{e.message}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Optimization & Suggested Refactoring */}
+                  {aiData.optimizedCode && (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-semibold tracking-wider text-slate-400 uppercase font-mono">
+                          Optimized Implementation
+                        </span>
+                        <span className="text-[10px] text-indigo-400 font-mono flex items-center gap-1">
+                          <span className="material-symbols-outlined text-[12px]">bolt</span> Refactored
+                        </span>
+                      </div>
+                      <div className="rounded-lg bg-[#080c14] border border-slate-800 p-3 font-mono text-[11px] leading-[18px] overflow-x-auto text-slate-300 shadow-inner select-text max-h-48">
+                        <pre><code>{aiData.optimizedCode}</code></pre>
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : null}
             </div>
 
-            <div className="p-4 border-t border-slate-800/80 bg-[#0a0e17]/80 shrink-0 space-y-2">
-              <button
-                className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg bg-gradient-to-r from-violet-500 via-indigo-500 to-cyan-500 hover:from-violet-400 hover:to-cyan-400 text-white font-medium text-xs transition-all shadow-md active:scale-95"
-                onClick={() => setIsAiDrawerOpen(false)}
-                type="button"
-              >
-                <span className="material-symbols-outlined text-[15px]">auto_awesome</span>
-                <span>Run Complete AI Audit</span>
-              </button>
-            </div>
+            {aiData?.optimizedCode && (
+              <div className="p-4 border-t border-slate-800/80 bg-[#0a0e17]/80 shrink-0 space-y-2">
+                <button
+                  className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg bg-gradient-to-r from-violet-500 via-indigo-500 to-cyan-500 hover:from-violet-400 hover:to-cyan-400 text-white font-medium text-xs transition-all shadow-md active:scale-95"
+                  onClick={applyOptimizedCode}
+                  type="button"
+                >
+                  <span className="material-symbols-outlined text-[15px]">auto_awesome</span>
+                  <span>Apply to Editor & Sync Peers</span>
+                </button>
+              </div>
+            )}
           </aside>
         )}
       </main>
