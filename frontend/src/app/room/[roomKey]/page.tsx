@@ -76,13 +76,14 @@ export default function CollaborativeRoomPage() {
   const monacoRef = useRef<any>(null);
   const isRemoteUpdateRef = useRef<boolean>(false);
   const remoteCursorDecorationsRef = useRef<Map<string, string[]>>(new Map());
-  const cursorThrottleRef = useRef<number>(0);
+  const remoteWidgetsRef = useRef<Map<string, any>>(new Map());
 
-  // Vibrant collaborator cursor palette
+  // Vibrant collaborator cursor palette (unique per tab instance)
   const userColorRef = useRef<string>('#38bdf8');
   useEffect(() => {
     const palette = ['#38bdf8', '#818cf8', '#34d399', '#fbbf24', '#f472b6', '#a78bfa', '#fb923c', '#2dd4bf'];
-    const id = session?.user?.id || Math.random().toString();
+    const tabSeed = typeof window !== 'undefined' ? (window.name || (window.name = Math.random().toString(36).substring(2, 7))) : '';
+    const id = (session?.user?.id || 'guest') + tabSeed;
     let hash = 0;
     for (let i = 0; i < id.length; i++) {
       hash = (hash << 5) - hash + id.charCodeAt(i);
@@ -202,14 +203,27 @@ export default function CollaborativeRoomPage() {
 
     socket.on('user:left', ({ socketId }) => {
       setActiveUsers((prev) => prev.filter((u) => u.socketId !== socketId));
-      // Cleanup remote cursor decoration and style tag
+
+      // 1. Remove remote cursor widget
+      if (editorRef.current && remoteWidgetsRef.current.has(socketId)) {
+        const widget = remoteWidgetsRef.current.get(socketId);
+        try {
+          editorRef.current.removeContentWidget(widget);
+        } catch (e) {
+          console.error(e);
+        }
+        remoteWidgetsRef.current.delete(socketId);
+      }
+
+      // 2. Remove remote selection decorations
       if (editorRef.current && remoteCursorDecorationsRef.current.has(socketId)) {
         const oldDecorations = remoteCursorDecorationsRef.current.get(socketId) || [];
         editorRef.current.deltaDecorations(oldDecorations, []);
         remoteCursorDecorationsRef.current.delete(socketId);
       }
+
       const cleanId = String(socketId).replace(/[^a-zA-Z0-9_-]/g, '_');
-      const styleEl = document.getElementById(`cursor-style-${cleanId}`);
+      const styleEl = document.getElementById(`sel-style-${cleanId}`);
       if (styleEl) styleEl.remove();
     });
 
@@ -219,90 +233,135 @@ export default function CollaborativeRoomPage() {
       setSaveStatus('saved');
     });
 
-    // Remote Cursor Tracking Broadcast
+    // Real-Time Collaborator Cursor Tracking via Monaco Native ContentWidgets
     socket.on('cursor:broadcast', ({ socketId, user, position, selection }) => {
       if (!editorRef.current || !monacoRef.current) return;
-      if (socketId === socket.id) return;
+      if (socketRef.current && socketId === socketRef.current.id) return;
 
       const cleanId = String(socketId).replace(/[^a-zA-Z0-9_-]/g, '_');
-      const color = user?.color || '#818cf8';
-      const name = (user?.name || 'Peer').replace(/"/g, '\\"');
+      const color = user?.color || '#38bdf8';
+      const name = user?.name || 'Collaborator';
 
-      // Inject / update dynamic style tag for peer caret and selection
-      let styleEl = document.getElementById(`cursor-style-${cleanId}`) as HTMLStyleElement;
-      if (!styleEl) {
-        styleEl = document.createElement('style');
-        styleEl.id = `cursor-style-${cleanId}`;
-        document.head.appendChild(styleEl);
-      }
-      styleEl.textContent = `
-        .remote-caret-${cleanId} {
-          border-left: 2px solid ${color} !important;
-          margin-left: -1px;
-          position: relative;
-          z-index: 10;
-        }
-        .remote-caret-${cleanId}::after {
-          content: "${name}";
-          position: absolute;
-          top: -18px;
-          left: -2px;
-          font-size: 10px;
-          line-height: 14px;
-          background-color: ${color};
-          color: #0b0f19;
-          font-family: ui-sans-serif, system-ui, sans-serif;
-          font-weight: 700;
-          padding: 0 4px;
-          border-radius: 3px;
-          white-space: nowrap;
-          pointer-events: none;
-          z-index: 50;
-          box-shadow: 0 2px 6px rgba(0,0,0,0.4);
-          opacity: 0.95;
-        }
-        .remote-selection-${cleanId} {
-          background-color: ${color}33 !important;
-        }
-      `;
-
-      const decorations: any[] = [];
+      // 1. Manage physical caret line and floating peer badge using Monaco ContentWidget
       if (position?.lineNumber && position?.column) {
-        decorations.push({
-          range: new monacoRef.current.Range(
-            position.lineNumber,
-            position.column,
-            position.lineNumber,
-            position.column
-          ),
-          options: {
-            className: `remote-caret-${cleanId}`,
-            hoverMessage: { value: `**${user?.name || 'Peer'}** is editing here` },
-          },
-        });
+        let widget = remoteWidgetsRef.current.get(socketId);
+
+        if (!widget) {
+          const domNode = document.createElement('div');
+          domNode.className = `monaco-remote-cursor-container cursor-widget-${cleanId}`;
+          domNode.style.pointerEvents = 'none';
+          domNode.style.position = 'absolute';
+          domNode.style.zIndex = '60';
+
+          const caretBar = document.createElement('div');
+          caretBar.style.width = '2px';
+          caretBar.style.height = '18px';
+          caretBar.style.backgroundColor = color;
+          caretBar.style.position = 'relative';
+          caretBar.style.boxShadow = `0 0 6px ${color}`;
+
+          const nameTag = document.createElement('div');
+          nameTag.textContent = name;
+          nameTag.style.position = 'absolute';
+          nameTag.style.top = '-16px';
+          nameTag.style.left = '0';
+          nameTag.style.backgroundColor = color;
+          nameTag.style.color = '#0a0e17';
+          nameTag.style.fontSize = '9px';
+          nameTag.style.lineHeight = '12px';
+          nameTag.style.fontFamily = 'monospace';
+          nameTag.style.fontWeight = '700';
+          nameTag.style.padding = '0 4px';
+          nameTag.style.borderRadius = '2px';
+          nameTag.style.whiteSpace = 'nowrap';
+          nameTag.style.pointerEvents = 'none';
+          nameTag.style.boxShadow = '0 1px 4px rgba(0,0,0,0.5)';
+
+          caretBar.appendChild(nameTag);
+          domNode.appendChild(caretBar);
+
+          let currentPosition = { lineNumber: position.lineNumber, column: position.column };
+
+          widget = {
+            domNode,
+            caretBar,
+            nameTag,
+            getId: () => `cursor-widget-${cleanId}`,
+            getDomNode: () => domNode,
+            getPosition: () => ({
+              position: currentPosition,
+              preference: [0], // EXACT
+            }),
+            update: (pos: { lineNumber: number; column: number }, usr: any) => {
+              currentPosition = pos;
+              if (usr?.color) {
+                caretBar.style.backgroundColor = usr.color;
+                caretBar.style.boxShadow = `0 0 6px ${usr.color}`;
+                nameTag.style.backgroundColor = usr.color;
+              }
+              if (usr?.name) {
+                nameTag.textContent = usr.name;
+              }
+            },
+          };
+
+          remoteWidgetsRef.current.set(socketId, widget);
+          try {
+            editorRef.current.addContentWidget(widget);
+          } catch (e) {
+            console.error('Failed to add content widget:', e);
+          }
+        } else {
+          widget.update({ lineNumber: position.lineNumber, column: position.column }, user);
+          try {
+            editorRef.current.layoutContentWidget(widget);
+          } catch (e) {
+            console.error('Failed to layout content widget:', e);
+          }
+        }
       }
 
+      // 2. Synchronize remote selection highlight (if active)
       if (
         selection &&
         (selection.startLineNumber !== selection.endLineNumber ||
           selection.startColumn !== selection.endColumn)
       ) {
-        decorations.push({
-          range: new monacoRef.current.Range(
-            selection.startLineNumber,
-            selection.startColumn,
-            selection.endLineNumber,
-            selection.endColumn
-          ),
-          options: {
-            className: `remote-selection-${cleanId}`,
-          },
-        });
-      }
+        let styleEl = document.getElementById(`sel-style-${cleanId}`) as HTMLStyleElement;
+        if (!styleEl) {
+          styleEl = document.createElement('style');
+          styleEl.id = `sel-style-${cleanId}`;
+          document.head.appendChild(styleEl);
+        }
+        styleEl.textContent = `
+          .remote-selection-${cleanId} {
+            background-color: ${color}33 !important;
+          }
+        `;
 
-      const oldDecorations = remoteCursorDecorationsRef.current.get(socketId) || [];
-      const newIds = editorRef.current.deltaDecorations(oldDecorations, decorations);
-      remoteCursorDecorationsRef.current.set(socketId, newIds);
+        const decorations = [
+          {
+            range: new monacoRef.current.Range(
+              selection.startLineNumber,
+              selection.startColumn,
+              selection.endLineNumber,
+              selection.endColumn
+            ),
+            options: {
+              className: `remote-selection-${cleanId}`,
+            },
+          },
+        ];
+        const oldDecs = remoteCursorDecorationsRef.current.get(socketId) || [];
+        const newDecs = editorRef.current.deltaDecorations(oldDecs, decorations);
+        remoteCursorDecorationsRef.current.set(socketId, newDecs);
+      } else {
+        if (remoteCursorDecorationsRef.current.has(socketId)) {
+          const oldDecs = remoteCursorDecorationsRef.current.get(socketId) || [];
+          editorRef.current.deltaDecorations(oldDecs, []);
+          remoteCursorDecorationsRef.current.delete(socketId);
+        }
+      }
     });
 
     socket.on('voice:speaking', ({ socketId, isSpeaking }) => {
@@ -317,7 +376,21 @@ export default function CollaborativeRoomPage() {
       if (autoSaveTimerRef.current) {
         clearTimeout(autoSaveTimerRef.current);
       }
-      document.querySelectorAll('[id^="cursor-style-"]').forEach((el) => el.remove());
+      if (editorRef.current) {
+        remoteWidgetsRef.current.forEach((w) => {
+          try {
+            editorRef.current?.removeContentWidget(w);
+          } catch (e) {}
+        });
+        remoteCursorDecorationsRef.current.forEach((d) => {
+          try {
+            editorRef.current?.deltaDecorations(d, []);
+          } catch (e) {}
+        });
+      }
+      remoteWidgetsRef.current.clear();
+      remoteCursorDecorationsRef.current.clear();
+      document.querySelectorAll('[id^="sel-style-"]').forEach((el) => el.remove());
       voiceManager.destroy();
       socket.disconnect();
     };
@@ -723,26 +796,22 @@ export default function CollaborativeRoomPage() {
               editorRef.current = editor;
               monacoRef.current = monaco;
 
-              // Emit cursor position updates to peer collaborators
-              editor.onDidChangeCursorPosition((e: any) => {
-                const now = Date.now();
-                if (now - cursorThrottleRef.current < 50) return;
-                cursorThrottleRef.current = now;
-
+              const emitCursorUpdate = (position: any, selection: any) => {
                 if (socketRef.current && socketRef.current.connected) {
-                  const sel = editor.getSelection();
                   socketRef.current.emit('cursor:update', {
                     roomKey,
-                    position: {
-                      lineNumber: e.position.lineNumber,
-                      column: e.position.column,
-                    },
-                    selection: sel
+                    position: position
                       ? {
-                          startLineNumber: sel.startLineNumber,
-                          startColumn: sel.startColumn,
-                          endLineNumber: sel.endLineNumber,
-                          endColumn: sel.endColumn,
+                          lineNumber: position.lineNumber,
+                          column: position.column,
+                        }
+                      : null,
+                    selection: selection
+                      ? {
+                          startLineNumber: selection.startLineNumber,
+                          startColumn: selection.startColumn,
+                          endLineNumber: selection.endLineNumber,
+                          endColumn: selection.endColumn,
                         }
                       : null,
                     user: {
@@ -752,37 +821,29 @@ export default function CollaborativeRoomPage() {
                     },
                   });
                 }
+              };
+
+              // Emit initial cursor position when mounting
+              const startPos = editor.getPosition();
+              if (startPos) {
+                emitCursorUpdate(startPos, editor.getSelection());
+              }
+
+              // High-frequency 60fps cursor position sync
+              let rafId: number | null = null;
+              editor.onDidChangeCursorPosition((e: any) => {
+                if (rafId) cancelAnimationFrame(rafId);
+                rafId = requestAnimationFrame(() => {
+                  emitCursorUpdate(e.position, editor.getSelection());
+                });
               });
 
-              // Emit selection changes
+              // Real-time selection sync
               editor.onDidChangeCursorSelection((e: any) => {
-                const now = Date.now();
-                if (now - cursorThrottleRef.current < 50) return;
-                cursorThrottleRef.current = now;
-
-                if (socketRef.current && socketRef.current.connected) {
-                  const pos = editor.getPosition();
-                  socketRef.current.emit('cursor:update', {
-                    roomKey,
-                    position: pos
-                      ? {
-                          lineNumber: pos.lineNumber,
-                          column: pos.column,
-                        }
-                      : null,
-                    selection: {
-                      startLineNumber: e.selection.startLineNumber,
-                      startColumn: e.selection.startColumn,
-                      endLineNumber: e.selection.endLineNumber,
-                      endColumn: e.selection.endColumn,
-                    },
-                    user: {
-                      id: session?.user?.id || 'guest',
-                      name: session?.user?.name || 'Guest Developer',
-                      color: userColorRef.current,
-                    },
-                  });
-                }
+                if (rafId) cancelAnimationFrame(rafId);
+                rafId = requestAnimationFrame(() => {
+                  emitCursorUpdate(editor.getPosition(), e.selection);
+                });
               });
             }}
             options={{
