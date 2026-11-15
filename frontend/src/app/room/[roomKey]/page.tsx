@@ -69,6 +69,7 @@ export default function CollaborativeRoomPage() {
 
   const [copyToast, setCopyToast] = useState(false);
   const [exportToast, setExportToast] = useState(false);
+  const [consoleCopyToast, setConsoleCopyToast] = useState(false);
 
   const socketRef = useRef<Socket | null>(null);
   const voiceManagerRef = useRef<WebRTCVoiceManager | null>(null);
@@ -537,16 +538,16 @@ export default function CollaborativeRoomPage() {
         logs.push({ type: 'info', text: 'Script evaluated successfully (no output logged).' });
       }
 
-      setOutputLogs((prev) => [
-        ...prev,
+      // Automatically refresh console on new run, clearing old errors and logs
+      setOutputLogs([
         { type: 'info', text: `-- Executed at ${new Date().toLocaleTimeString()} in ${duration}ms --` },
         ...logs,
       ]);
     } catch (err: any) {
       const duration = (performance.now() - startTime).toFixed(1);
       setExecTime(`${duration}ms`);
-      setOutputLogs((prev) => [
-        ...prev,
+      // Display only the latest run error
+      setOutputLogs([
         { type: 'info', text: `-- Execution failed in ${duration}ms --` },
         { type: 'error', text: err?.stack || err?.message || String(err) },
       ]);
@@ -620,6 +621,15 @@ export default function CollaborativeRoomPage() {
 
   const clearConsole = () => {
     setOutputLogs([{ type: 'info', text: 'Console buffer cleared.' }]);
+  };
+
+  const copyConsoleOutput = () => {
+    if (typeof window !== 'undefined' && navigator.clipboard) {
+      const fullText = outputLogs.map((l) => l.text).join('\n');
+      navigator.clipboard.writeText(fullText);
+      setConsoleCopyToast(true);
+      setTimeout(() => setConsoleCopyToast(false), 2000);
+    }
   };
 
   return (
@@ -1050,10 +1060,29 @@ export default function CollaborativeRoomPage() {
               </span>
             </div>
             <div className="flex items-center gap-1.5 border-l border-slate-800 pl-3">
+              {/* Copy console logs button */}
+              <div className="relative">
+                <button
+                  className="w-6 h-6 rounded hover:bg-slate-800 flex items-center justify-center text-slate-400 hover:text-slate-200 transition-colors"
+                  onClick={copyConsoleOutput}
+                  title="Copy console output to clipboard"
+                >
+                  <span className="material-symbols-outlined text-[15px]">
+                    {consoleCopyToast ? 'check' : 'content_copy'}
+                  </span>
+                </button>
+                {consoleCopyToast && (
+                  <span className="absolute -top-7 right-0 bg-slate-800 text-slate-200 border border-slate-700 font-sans text-[10px] px-1.5 py-0.5 rounded shadow-lg whitespace-nowrap z-50">
+                    Copied!
+                  </span>
+                )}
+              </div>
+
+              {/* Clear console button */}
               <button
                 className="w-6 h-6 rounded hover:bg-slate-800 flex items-center justify-center text-slate-400 hover:text-slate-200 transition-colors"
                 onClick={clearConsole}
-                title="Clear console"
+                title="Clear console buffer"
               >
                 <span className="material-symbols-outlined text-[15px]">delete_sweep</span>
               </button>
@@ -1070,13 +1099,13 @@ export default function CollaborativeRoomPage() {
           </div>
         </div>
 
-        {/* Console Body */}
+        {/* Console Body with User Select and Text Cursor Enabled */}
         {!isOutputCollapsed && (
-          <div className="p-4 font-mono text-xs leading-relaxed space-y-1 bg-[#080c14] overflow-y-auto max-h-48 min-h-[6rem]">
+          <div className="p-4 font-mono text-xs leading-relaxed space-y-1 bg-[#080c14] overflow-y-auto max-h-48 min-h-[6rem] select-text cursor-text">
             {outputLogs.map((log, index) => (
               <div
                 key={index}
-                className={`flex items-start gap-2 ${
+                className={`flex items-start gap-2 select-text cursor-text ${
                   log.type === 'error'
                     ? 'text-rose-400 bg-rose-950/20 px-2 py-0.5 rounded -mx-2'
                     : log.type === 'log'
@@ -1085,7 +1114,7 @@ export default function CollaborativeRoomPage() {
                 }`}
               >
                 <span className="text-slate-600 select-none">&gt;</span>
-                <span className="whitespace-pre-wrap">{log.text}</span>
+                <span className="whitespace-pre-wrap break-all select-text cursor-text">{log.text}</span>
               </div>
             ))}
           </div>
