@@ -60,6 +60,7 @@ io.on('connection', (socket) => {
         language: 'javascript',
         title: title || '',
         users: new Map(),
+        messages: [],
       });
     }
 
@@ -85,6 +86,7 @@ io.on('connection', (socket) => {
       language: room.language,
       title: room.title || '',
       activeUsers: Array.from(room.users.values()),
+      messages: room.messages || [],
     });
 
     // Broadcast new user to existing peers
@@ -112,6 +114,27 @@ io.on('connection', (socket) => {
       });
       console.log(`[Room: ${roomKey}] Profile updated: ${updated.name} (${socket.id})`);
     }
+  });
+
+  // Real-Time Session-Only Room Chat
+  socket.on('chat:send', ({ roomKey, text, user }) => {
+    const room = rooms.get(roomKey);
+    if (!room || !text || typeof text !== 'string' || !text.trim()) return;
+
+    const message = {
+      id: `${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      senderId: user?.id || socket.id,
+      senderName: user?.name || 'Collaborator',
+      senderColor: user?.color || '#818cf8',
+      text: text.trim().slice(0, 500),
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
+
+    if (!room.messages) room.messages = [];
+    if (room.messages.length >= 100) room.messages.shift();
+    room.messages.push(message);
+
+    io.to(roomKey).emit('chat:message', message);
   });
 
   // Code Synchronization with atomic cursor position sync

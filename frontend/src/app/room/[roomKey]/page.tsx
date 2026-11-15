@@ -19,6 +19,15 @@ interface Participant {
   socketId: string;
 }
 
+interface ChatMessage {
+  id: string;
+  senderId: string;
+  senderName: string;
+  senderColor: string;
+  text: string;
+  timestamp: string;
+}
+
 interface LanguageConfig {
   id: string;
   name: string;
@@ -139,6 +148,14 @@ export default function CollaborativeRoomPage() {
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [aiData, setAiData] = useState<AIAnalysis | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
+
+  // Session-Only Chat State
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState('');
+  const [unreadChatCount, setUnreadChatCount] = useState(0);
+  const chatMessagesEndRef = useRef<HTMLDivElement | null>(null);
+  const chatInputRef = useRef<HTMLInputElement | null>(null);
 
   // Auto-Save & Cloud Persistence State
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'unsaved' | 'error'>('saved');
@@ -336,6 +353,9 @@ export default function CollaborativeRoomPage() {
       }
       if (data.activeUsers) {
         setActiveUsers(data.activeUsers);
+      }
+      if (data.messages && Array.isArray(data.messages)) {
+        setChatMessages(data.messages);
       }
     });
 
@@ -583,6 +603,16 @@ export default function CollaborativeRoomPage() {
       if (language && SUPPORTED_LANGUAGES.some((l) => l.id === language)) {
         setSelectedLanguage(language);
       }
+    });
+
+    socket.on('chat:message', (message: ChatMessage) => {
+      setChatMessages((prev) => [...prev, message]);
+      setIsChatOpen((open) => {
+        if (!open) {
+          setUnreadChatCount((count) => count + 1);
+        }
+        return open;
+      });
     });
 
     socket.on('disconnect', () => {
@@ -935,6 +965,38 @@ export default function CollaborativeRoomPage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [executeCode, saveCodeToDb, code]);
 
+  // Chat Handlers (Session Only)
+  const toggleChat = () => {
+    setIsChatOpen((prev) => {
+      const next = !prev;
+      if (next) {
+        setUnreadChatCount(0);
+        setTimeout(() => chatInputRef.current?.focus(), 50);
+      }
+      return next;
+    });
+  };
+
+  const sendChatMessage = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const trimmed = chatInput.trim();
+    if (!trimmed || !socketRef.current || !socketConnected) return;
+
+    socketRef.current.emit('chat:send', {
+      roomKey,
+      text: trimmed,
+      user: currentUserRef.current,
+    });
+
+    setChatInput('');
+  };
+
+  useEffect(() => {
+    if (isChatOpen) {
+      chatMessagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [chatMessages, isChatOpen]);
+
   const copyRoomLink = () => {
     if (typeof window !== 'undefined' && navigator.clipboard) {
       navigator.clipboard.writeText(window.location.href);
@@ -1216,6 +1278,26 @@ export default function CollaborativeRoomPage() {
               </span>
             )}
           </div>
+
+          {/* Chat Drawer Toggle Button with Unread Counter */}
+          <button
+            onClick={toggleChat}
+            className={`relative flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-all active:scale-95 ${
+              isChatOpen
+                ? 'bg-indigo-600/20 text-indigo-300 border-indigo-500/50 shadow-[0_0_12px_rgba(99,102,241,0.25)]'
+                : 'bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white border-slate-800'
+            }`}
+            type="button"
+            title="Toggle Room Chat (Session Only)"
+          >
+            <span className="material-symbols-outlined text-[15px]">chat</span>
+            <span className="hidden sm:inline">Chat</span>
+            {unreadChatCount > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 bg-rose-500 text-white font-mono text-[10px] font-bold rounded-full flex items-center justify-center shadow-md animate-pulse">
+                {unreadChatCount > 9 ? '9+' : unreadChatCount}
+              </span>
+            )}
+          </button>
 
           {/* AI Review Drawer Button */}
           <button
@@ -1558,6 +1640,103 @@ export default function CollaborativeRoomPage() {
                 </button>
               </div>
             )}
+          </aside>
+        )}
+
+        {/* Slide-over Team Chat Drawer (Session Only) */}
+        {isChatOpen && (
+          <aside className="absolute top-0 right-0 bottom-0 w-[340px] max-w-[90vw] bg-[#0b0f19]/98 backdrop-blur-md border-l border-slate-800/90 shadow-2xl z-40 flex flex-col font-sans transition-all duration-200">
+            {/* Drawer Header */}
+            <div className="h-12 px-4 border-b border-slate-800/80 flex items-center justify-between bg-[#0e1320] shrink-0">
+              <div className="flex items-center gap-2">
+                <div className="w-6 h-6 rounded-lg bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-400">
+                  <span className="material-symbols-outlined text-[15px]">chat</span>
+                </div>
+                <div>
+                  <h3 className="font-semibold text-xs tracking-tight text-white flex items-center gap-1.5">
+                    Room Chat
+                    <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-slate-800 text-slate-400 font-mono">
+                      Session Only
+                    </span>
+                  </h3>
+                </div>
+              </div>
+              <button
+                className="w-7 h-7 rounded-lg hover:bg-slate-800 flex items-center justify-center text-slate-400 hover:text-slate-200 transition-colors"
+                onClick={() => setIsChatOpen(false)}
+                title="Close chat"
+              >
+                <span className="material-symbols-outlined text-[18px]">close</span>
+              </button>
+            </div>
+
+            {/* Chat Messages Feed */}
+            <div className="flex-1 overflow-y-auto p-3 space-y-3 min-h-0 select-text font-sans">
+              {chatMessages.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-center p-6 text-slate-500 select-none">
+                  <div className="w-10 h-10 rounded-full bg-slate-900 border border-slate-800 flex items-center justify-center mb-2.5 text-slate-600">
+                    <span className="material-symbols-outlined text-[20px]">chat_bubble_outline</span>
+                  </div>
+                  <p className="text-xs font-semibold text-slate-400">No messages yet</p>
+                  <p className="text-[11px] text-slate-500 mt-1 max-w-[200px] leading-relaxed">
+                    Say hello to your connected peers! Messages exist only during this session.
+                  </p>
+                </div>
+              ) : (
+                chatMessages.map((msg) => {
+                  const isOwn =
+                    msg.senderId === currentUserRef.current.id ||
+                    (socketRef.current && msg.senderId === socketRef.current.id);
+                  return (
+                    <div
+                      key={msg.id}
+                      className={`flex flex-col ${isOwn ? 'items-end' : 'items-start'} space-y-1`}
+                    >
+                      <div className="flex items-center gap-1.5 text-[10px] text-slate-400 px-1">
+                        <span style={{ color: msg.senderColor }} className="font-semibold">
+                          {isOwn ? 'You' : msg.senderName}
+                        </span>
+                        <span className="text-slate-600">•</span>
+                        <span className="font-mono text-slate-500">{msg.timestamp}</span>
+                      </div>
+                      <div
+                        className={`max-w-[85%] rounded-2xl px-3 py-2 text-xs leading-relaxed break-words shadow-sm ${
+                          isOwn
+                            ? 'bg-indigo-600 text-white rounded-tr-xs shadow-[0_2px_8px_rgba(79,70,229,0.25)]'
+                            : 'bg-slate-800/90 text-slate-200 border border-slate-700/60 rounded-tl-xs'
+                        }`}
+                      >
+                        {msg.text}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+              <div ref={chatMessagesEndRef} />
+            </div>
+
+            {/* Chat Input Bar */}
+            <form onSubmit={sendChatMessage} className="p-3 border-t border-slate-800/80 bg-[#090d16] shrink-0">
+              <div className="flex items-center gap-1.5 bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 focus-within:border-indigo-500 transition-colors shadow-inner">
+                <input
+                  ref={chatInputRef}
+                  type="text"
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  placeholder="Type a message... (Enter)"
+                  maxLength={500}
+                  className="bg-transparent flex-1 text-xs text-white placeholder-slate-500 focus:outline-none"
+                />
+                <button
+                  type="submit"
+                  disabled={!chatInput.trim()}
+                  className="w-7 h-7 rounded-md bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 disabled:hover:bg-indigo-600 text-white flex items-center justify-center transition-all cursor-pointer disabled:cursor-not-allowed shrink-0"
+                  title="Send message"
+                >
+                  <span className="material-symbols-outlined text-[15px]">send</span>
+                </button>
+              </div>
+            </form>
           </aside>
         )}
       </main>
