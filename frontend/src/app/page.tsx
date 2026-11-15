@@ -20,6 +20,17 @@ export default function LandingPage() {
     }, 700);
   };
 
+  const handleSignInClick = () => {
+    const authElement = document.getElementById('auth-section');
+    if (authElement) {
+      authElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      authElement.classList.add('ring-2', 'ring-[#8083ff]');
+      setTimeout(() => {
+        authElement.classList.remove('ring-2', 'ring-[#8083ff]');
+      }, 1500);
+    }
+  };
+
   return (
     <div className="bg-[#0f131d] text-[#dfe2f1] min-h-screen selection:bg-[#571bc1] selection:text-[#c4abff] flex flex-col font-sans">
       {/* Header */}
@@ -31,30 +42,10 @@ export default function LandingPage() {
                 <span className="material-symbols-outlined text-[#c0c1ff] text-[20px]">bolt</span>
               </div>
               <span className="font-semibold text-lg text-[#dfe2f1] tracking-tight">SynCode</span>
-              <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-[#262a35] text-[#c0c1ff] border border-[#464554]/40 font-semibold">
-                Beta
-              </span>
             </Link>
-
-            <nav className="hidden md:flex items-center gap-1">
-              <span className="px-3 py-1.5 rounded text-sm text-[#dfe2f1] bg-[#262a35] font-medium">Overview</span>
-              <span className="px-3 py-1.5 rounded text-sm text-[#c7c4d7] hover:text-[#dfe2f1] transition-colors cursor-pointer">Features</span>
-              <span className="px-3 py-1.5 rounded text-sm text-[#c7c4d7] hover:text-[#dfe2f1] transition-colors cursor-pointer">Architecture</span>
-              <span className="px-3 py-1.5 rounded text-sm text-[#c7c4d7] hover:text-[#dfe2f1] transition-colors cursor-pointer">Docs</span>
-            </nav>
           </div>
 
           <div className="flex items-center gap-3">
-            <a
-              href="https://github.com/Shivam1501singh/shared_code_editor"
-              target="_blank"
-              rel="noreferrer"
-              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#171b26] hover:bg-[#1c1f2a] border border-[#464554]/40 text-[#c7c4d7] hover:text-[#dfe2f1] transition-all text-xs font-mono"
-            >
-              <span className="material-symbols-outlined text-[16px]">code</span>
-              <span>GitHub</span>
-            </a>
-
             {status === 'authenticated' && session?.user ? (
               <Link
                 href="/dashboard"
@@ -65,8 +56,8 @@ export default function LandingPage() {
               </Link>
             ) : (
               <button
-                onClick={() => signIn()}
-                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-[#8083ff] hover:bg-[#c0c1ff] text-[#1000a9] font-medium transition-all text-sm shadow-[0_0_20px_rgba(192,193,255,0.25)]"
+                onClick={handleSignInClick}
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-[#8083ff] hover:bg-[#c0c1ff] text-[#1000a9] font-medium transition-all text-sm shadow-[0_0_20px_rgba(192,193,255,0.25)] cursor-pointer"
               >
                 <span>Sign In</span>
               </button>
@@ -119,7 +110,7 @@ export default function LandingPage() {
             </p>
 
             {/* Central Authentication & Join Card */}
-            <div className="w-full max-w-md mx-auto mt-8 text-left relative">
+            <div id="auth-section" className="w-full max-w-md mx-auto mt-8 text-left relative scroll-mt-24 transition-all duration-300">
               <div className="h-1 w-full bg-gradient-to-r from-[#7bd0ff] via-[#8083ff] to-[#d0bcff] rounded-t-xl opacity-90" />
               <div className="bg-[#171b26]/95 backdrop-blur-2xl p-6 md:p-8 rounded-b-xl shadow-2xl border-x border-b border-[#464554]/30">
                 <div className="mb-6">
@@ -327,13 +318,10 @@ export default function LandingPage() {
 
       {/* Footer */}
       <footer className="w-full bg-[#0a0e18] border-t border-[#464554]/20 py-6">
-        <div className="w-full max-w-6xl mx-auto px-6 flex flex-col sm:flex-row items-center justify-between gap-4">
+        <div className="w-full max-w-6xl mx-auto px-6 flex items-center justify-center sm:justify-start">
           <div className="flex items-center gap-2">
             <span className="material-symbols-outlined text-[#c0c1ff] text-[18px]">bolt</span>
             <span className="text-xs font-mono text-[#c7c4d7]">© 2026 SynCode Labs. Real-time collaborative editor with Voice & AI.</span>
-          </div>
-          <div className="flex items-center gap-4 text-xs text-[#c7c4d7]">
-            <a href="https://github.com/Shivam1501singh/shared_code_editor" target="_blank" rel="noreferrer" className="hover:text-[#dfe2f1] transition-colors">GitHub Repository</a>
           </div>
         </div>
       </footer>
