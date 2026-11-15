@@ -140,6 +140,15 @@ io.on('connection', (socket) => {
     socket.to(roomKey).emit('room:title-update', { title });
   });
 
+  // Room Language Sync (JavaScript, Python, Java, C, C++)
+  socket.on('room:language-update', ({ roomKey, language }) => {
+    const room = rooms.get(roomKey);
+    if (room && language) {
+      room.language = language;
+    }
+    socket.to(roomKey).emit('room:language-update', { language });
+  });
+
   // WebRTC Signaling Events
   socket.on('voice:join', ({ roomKey }) => {
     socket.to(roomKey).emit('voice:peer-joined', { socketId: socket.id });

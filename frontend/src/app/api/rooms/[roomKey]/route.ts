@@ -92,6 +92,7 @@ export async function PATCH(
       where: { roomKey },
       data: {
         ...(body.title ? { title: body.title.trim() } : {}),
+        ...(body.language ? { language: body.language.trim() } : {}),
         ...(body.codeContent !== undefined ? { codeContent: body.codeContent } : {}),
       },
     });

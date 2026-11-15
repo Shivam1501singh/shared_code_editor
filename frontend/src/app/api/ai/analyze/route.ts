@@ -31,7 +31,7 @@ export async function POST(req: Request) {
 
     const prompt = `You are an expert algorithmic code reviewer and software architect.
 Analyze the following ${language} code thoroughly.
-Identify any syntax errors, runtime mistakes (such as using types like 'int' or 'char' in JavaScript, undefined variables, or invalid operations), logical bugs, edge cases, and performance bottlenecks.
+Identify any syntax errors, compiler issues, runtime mistakes (such as type mismatches, undeclared variables, missing includes/imports, memory leaks, or invalid operations), logical bugs, edge cases, and performance bottlenecks.
 Return strict JSON with this exact schema:
 {
   "timeComplexity": "e.g. O(n) or O(1)",
@@ -47,7 +47,7 @@ Return strict JSON with this exact schema:
   "optimizationTips": [
     "Clear actionable step to fix or optimize the code"
   ],
-  "optimizedCode": "clean, fully working, modern ES6+ JavaScript code fixing all mistakes"
+  "optimizedCode": "clean, fully working, modern ${language} code fixing all mistakes"
 }
 
 Code to analyze:

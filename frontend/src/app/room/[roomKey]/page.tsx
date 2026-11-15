@@ -19,6 +19,64 @@ interface Participant {
   socketId: string;
 }
 
+interface LanguageConfig {
+  id: string;
+  name: string;
+  monacoLang: string;
+  filename: string;
+  icon: string;
+  iconBg: string;
+  defaultCode: string;
+}
+
+const SUPPORTED_LANGUAGES: LanguageConfig[] = [
+  {
+    id: 'javascript',
+    name: 'JavaScript',
+    monacoLang: 'javascript',
+    filename: 'solution.js',
+    icon: 'JS',
+    iconBg: 'bg-amber-400 text-slate-950',
+    defaultCode: '// Start coding in JavaScript...\nconsole.log("Hello, SynCode World!");\n',
+  },
+  {
+    id: 'python',
+    name: 'Python',
+    monacoLang: 'python',
+    filename: 'solution.py',
+    icon: 'PY',
+    iconBg: 'bg-blue-500 text-white',
+    defaultCode: '# Start coding in Python 3...\nprint("Hello from Python 3!")\n',
+  },
+  {
+    id: 'java',
+    name: 'Java',
+    monacoLang: 'java',
+    filename: 'Main.java',
+    icon: 'JV',
+    iconBg: 'bg-rose-500 text-white',
+    defaultCode: '// Start coding in Java...\npublic class Main {\n    public static void main(String[] args) {\n        System.out.println("Hello from Java!");\n    }\n}\n',
+  },
+  {
+    id: 'c',
+    name: 'C',
+    monacoLang: 'c',
+    filename: 'main.c',
+    icon: 'C',
+    iconBg: 'bg-cyan-500 text-slate-950',
+    defaultCode: '// Start coding in C...\n#include <stdio.h>\n\nint main() {\n    printf("Hello from C!\\n");\n    return 0;\n}\n',
+  },
+  {
+    id: 'cpp',
+    name: 'C++',
+    monacoLang: 'cpp',
+    filename: 'main.cpp',
+    icon: 'C++',
+    iconBg: 'bg-indigo-500 text-white',
+    defaultCode: '// Start coding in C++...\n#include <iostream>\n\nint main() {\n    std::cout << "Hello from C++!" << std::endl;\n    return 0;\n}\n',
+  },
+];
+
 interface AIAnalysis {
   timeComplexity: string;
   spaceComplexity: string;
@@ -41,6 +99,8 @@ export default function CollaborativeRoomPage() {
   const codeRef = useRef<string>('// Loading collaborative editor...');
   const isTypingRef = useRef<boolean>(false);
   const [roomTitle, setRoomTitle] = useState<string>('Untitled Room');
+  const [selectedLanguage, setSelectedLanguage] = useState<string>('javascript');
+  const currentLangConfig = SUPPORTED_LANGUAGES.find((l) => l.id === selectedLanguage) || SUPPORTED_LANGUAGES[0];
   const [roomHost, setRoomHost] = useState<{ id: string; name: string } | null>(null);
   const [activeUsers, setActiveUsers] = useState<Participant[]>([]);
   const [socketConnected, setSocketConnected] = useState(false);
@@ -188,6 +248,9 @@ export default function CollaborativeRoomPage() {
           if (json.success && json.data) {
             const fetchedTitle = json.data.title || 'Untitled Room';
             setRoomTitle(fetchedTitle);
+            if (json.data.language && SUPPORTED_LANGUAGES.some((l) => l.id === json.data.language)) {
+              setSelectedLanguage(json.data.language);
+            }
             if (json.data.host) {
               setRoomHost(json.data.host);
             }
@@ -256,6 +319,9 @@ export default function CollaborativeRoomPage() {
     socket.on('room:init', (data) => {
       if (data.title) {
         setRoomTitle(data.title);
+      }
+      if (data.language && SUPPORTED_LANGUAGES.some((l) => l.id === data.language)) {
+        setSelectedLanguage(data.language);
       }
       if (data.codeContent) {
         codeRef.current = data.codeContent;
@@ -503,6 +569,12 @@ export default function CollaborativeRoomPage() {
       }
     });
 
+    socket.on('room:language-update', ({ language }: { language: string }) => {
+      if (language && SUPPORTED_LANGUAGES.some((l) => l.id === language)) {
+        setSelectedLanguage(language);
+      }
+    });
+
     socket.on('disconnect', () => {
       setSocketConnected(false);
     });
@@ -567,19 +639,75 @@ export default function CollaborativeRoomPage() {
     }
   };
 
-  // Download code as .js file export
+  // Language Switch Handler (Syncs across peers and updates boilerplate if empty)
+  const handleLanguageChange = async (newLangId: string) => {
+    if (newLangId === selectedLanguage) return;
+    const newLang = SUPPORTED_LANGUAGES.find((l) => l.id === newLangId);
+    if (!newLang) return;
+
+    setSelectedLanguage(newLangId);
+
+    // If current code is default or empty, switch to new template
+    const currentCode = editorRef.current ? editorRef.current.getValue() : codeRef.current;
+    const isDefaultOrEmpty =
+      !currentCode.trim() ||
+      SUPPORTED_LANGUAGES.some((l) => l.defaultCode.trim() === currentCode.trim()) ||
+      currentCode.includes('Start coding collaboratively here...') ||
+      currentCode.includes('Start coding here...') ||
+      currentCode.includes('Welcome to SynCode!');
+
+    if (isDefaultOrEmpty) {
+      setCode(newLang.defaultCode);
+      codeRef.current = newLang.defaultCode;
+      if (editorRef.current) {
+        const model = editorRef.current.getModel();
+        if (model) {
+          model.setValue(newLang.defaultCode);
+        }
+      }
+      if (socketRef.current && socketRef.current.connected) {
+        socketRef.current.emit('code:update', {
+          roomKey,
+          codeContent: newLang.defaultCode,
+          cursorPosition: { lineNumber: 1, column: 1 },
+          user: currentUserRef.current,
+        });
+      }
+    }
+
+    // Broadcast language update to peers
+    if (socketRef.current && socketRef.current.connected) {
+      socketRef.current.emit('room:language-update', { roomKey, language: newLangId });
+    }
+
+    // Persist language to database
+    try {
+      await fetch(`/api/rooms/${roomKey}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ language: newLangId }),
+      });
+    } catch (err) {
+      console.error('Failed to persist language change:', err);
+    }
+  };
+
+  // Download code with language-specific extension
   const downloadCode = () => {
     try {
       const currentCode = editorRef.current ? editorRef.current.getValue() : codeRef.current;
-      const blob = new Blob([currentCode], { type: 'text/javascript;charset=utf-8' });
+      const blob = new Blob([currentCode], { type: 'text/plain;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       const safeTitle = (roomTitle || 'syncode_solution')
         .toLowerCase()
         .replace(/[^a-z0-9_-]/g, '_')
         .replace(/_+/g, '_');
+
+      const extMatch = currentLangConfig.filename.match(/\.[^.]+$/);
+      const ext = extMatch ? extMatch[0] : '.txt';
       link.href = url;
-      link.download = `${safeTitle}.js`;
+      link.download = `${safeTitle}${ext}`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -606,67 +734,143 @@ export default function CollaborativeRoomPage() {
     }
   };
 
-  // Safe client-side JavaScript execution
-  const executeCode = useCallback(() => {
+  // Multi-Language Code Execution (JavaScript sandboxed locally, Python/Java/C/C++ via Judge0)
+  const executeCode = useCallback(async () => {
     setIsExecuting(true);
     const startTime = performance.now();
-    const logs: Array<{ type: 'log' | 'error' | 'info'; text: string }> = [];
+    const currentCode = editorRef.current ? editorRef.current.getValue() : codeRef.current;
 
-    const originalLog = console.log;
-    const originalError = console.error;
-    const originalWarn = console.warn;
+    // JavaScript: fast in-browser sandboxed execution
+    if (selectedLanguage === 'javascript') {
+      const logs: Array<{ type: 'log' | 'error' | 'info'; text: string }> = [];
+      const originalLog = console.log;
+      const originalError = console.error;
+      const originalWarn = console.warn;
 
+      try {
+        console.log = (...args: any[]) => {
+          logs.push({
+            type: 'log',
+            text: args.map((a) => (typeof a === 'object' ? JSON.stringify(a, null, 2) : String(a))).join(' '),
+          });
+        };
+        console.error = (...args: any[]) => {
+          logs.push({
+            type: 'error',
+            text: args.map((a) => (typeof a === 'object' ? JSON.stringify(a, null, 2) : String(a))).join(' '),
+          });
+        };
+        console.warn = (...args: any[]) => {
+          logs.push({
+            type: 'info',
+            text: `[warn] ${args.join(' ')}`,
+          });
+        };
+
+        const runner = new Function(currentCode);
+        runner();
+
+        const duration = (performance.now() - startTime).toFixed(1);
+        setExecTime(`${duration}ms`);
+
+        if (logs.length === 0) {
+          logs.push({ type: 'info', text: 'Script evaluated successfully (no output logged).' });
+        }
+
+        // Automatically refresh console on new run, clearing old errors and logs
+        setOutputLogs([
+          { type: 'info', text: `-- JavaScript executed at ${new Date().toLocaleTimeString()} in ${duration}ms --` },
+          ...logs,
+        ]);
+      } catch (err: any) {
+        const duration = (performance.now() - startTime).toFixed(1);
+        setExecTime(`${duration}ms`);
+        // Display only the latest run error
+        setOutputLogs([
+          { type: 'info', text: `-- JavaScript execution failed in ${duration}ms --` },
+          { type: 'error', text: err?.stack || err?.message || String(err) },
+        ]);
+      } finally {
+        console.log = originalLog;
+        console.error = originalError;
+        console.warn = originalWarn;
+        setIsExecuting(false);
+      }
+      return;
+    }
+
+    // Python, Java, C, C++: Judge0 Community sandbox execution
     try {
-      console.log = (...args: any[]) => {
-        logs.push({
-          type: 'log',
-          text: args.map((a) => (typeof a === 'object' ? JSON.stringify(a, null, 2) : String(a))).join(' '),
-        });
-      };
-      console.error = (...args: any[]) => {
-        logs.push({
-          type: 'error',
-          text: args.map((a) => (typeof a === 'object' ? JSON.stringify(a, null, 2) : String(a))).join(' '),
-        });
-      };
-      console.warn = (...args: any[]) => {
-        logs.push({
-          type: 'info',
-          text: `[warn] ${args.join(' ')}`,
-        });
-      };
+      setOutputLogs([
+        { type: 'info', text: `Compiling & executing ${currentLangConfig.name}...` },
+      ]);
 
-      const currentCode = editorRef.current ? editorRef.current.getValue() : codeRef.current;
-      const runner = new Function(currentCode);
-      runner();
+      const res = await fetch('/api/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          language: selectedLanguage,
+          code: currentCode,
+        }),
+      });
 
-      const duration = (performance.now() - startTime).toFixed(1);
-      setExecTime(`${duration}ms`);
+      const json = await res.json();
+      const clientDuration = ((performance.now() - startTime) / 1000).toFixed(2);
 
-      if (logs.length === 0) {
-        logs.push({ type: 'info', text: 'Script evaluated successfully (no output logged).' });
+      if (!res.ok || !json.success) {
+        setExecTime(`${clientDuration}s`);
+        setOutputLogs([
+          { type: 'info', text: `-- Execution failed (${clientDuration}s) --` },
+          { type: 'error', text: json.error || 'Execution runner failed.' },
+        ]);
+        return;
       }
 
-      // Automatically refresh console on new run, clearing old errors and logs
-      setOutputLogs([
-        { type: 'info', text: `-- Executed at ${new Date().toLocaleTimeString()} in ${duration}ms --` },
-        ...logs,
-      ]);
+      const { stdout, stderr, compileOutput, status, execTime: serverTime } = json.data;
+      setExecTime(serverTime || `${clientDuration}s`);
+
+      const newLogs: Array<{ type: 'log' | 'error' | 'info'; text: string }> = [
+        { type: 'info', text: `-- ${currentLangConfig.name} [${status}] in ${serverTime || clientDuration + 's'} --` },
+      ];
+
+      if (compileOutput && compileOutput.trim()) {
+        newLogs.push({
+          type: 'error',
+          text: `[Compilation Error]\n${compileOutput.trim()}`,
+        });
+      }
+
+      if (stderr && stderr.trim()) {
+        newLogs.push({
+          type: 'error',
+          text: `[Runtime Error]\n${stderr.trim()}`,
+        });
+      }
+
+      if (stdout && stdout.trim()) {
+        newLogs.push({
+          type: 'log',
+          text: stdout.replace(/\r\n/g, '\n').replace(/\n$/, ''),
+        });
+      } else if (!compileOutput && !stderr) {
+        newLogs.push({
+          type: 'info',
+          text: 'Process completed with return code 0 (no output).',
+        });
+      }
+
+      setOutputLogs(newLogs);
     } catch (err: any) {
-      const duration = (performance.now() - startTime).toFixed(1);
-      setExecTime(`${duration}ms`);
-      // Display only the latest run error
+      const clientDuration = ((performance.now() - startTime) / 1000).toFixed(2);
+      setExecTime(`${clientDuration}s`);
       setOutputLogs([
-        { type: 'info', text: `-- Execution failed in ${duration}ms --` },
-        { type: 'error', text: err?.stack || err?.message || String(err) },
+        { type: 'info', text: `-- Network or Runner Error --` },
+        { type: 'error', text: err?.message || 'Failed to reach code execution server.' },
       ]);
     } finally {
-      console.log = originalLog;
-      console.error = originalError;
-      console.warn = originalWarn;
       setIsExecuting(false);
     }
-  }, [code]);
+  }, [selectedLanguage, currentLangConfig, code]);
 
   // Request AI Code Review from Google Gemini API
   const runAiReview = async () => {
@@ -679,7 +883,7 @@ export default function CollaborativeRoomPage() {
       const res = await fetch('/api/ai/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: currentCode, language: 'javascript' }),
+        body: JSON.stringify({ code: currentCode, language: selectedLanguage }),
       });
 
       const json = await res.json();
@@ -982,7 +1186,7 @@ export default function CollaborativeRoomPage() {
               onClick={downloadCode}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900/90 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white font-medium text-xs transition-all active:scale-95"
               type="button"
-              title="Download solution.js"
+              title={`Download ${currentLangConfig.filename}`}
             >
               <span className="material-symbols-outlined text-[14px]">download</span>
               <span className="hidden sm:inline">Export</span>
@@ -1029,15 +1233,38 @@ export default function CollaborativeRoomPage() {
       <main className="relative flex-1 flex flex-col bg-[#0a0e17] overflow-hidden">
         {/* Editor Tab Strip */}
         <div className="h-9 px-4 bg-[#090d16] border-b border-slate-800/60 flex items-center justify-between text-xs font-mono select-none shrink-0">
-          <div className="flex items-center gap-2 h-full border-b-2 border-indigo-400 px-1 text-slate-200 font-medium">
-            <span className="w-3.5 h-3.5 rounded bg-amber-400 text-slate-950 font-bold text-[9px] flex items-center justify-center font-sans leading-none">
-              JS
-            </span>
-            <span>solution.js</span>
+          <div className="flex items-center gap-3">
+            {/* Active File Tab */}
+            <div className="flex items-center gap-2 h-full border-b-2 border-indigo-400 px-1 text-slate-200 font-medium py-1">
+              <span className={`w-4 h-4 rounded ${currentLangConfig.iconBg} font-bold text-[9px] flex items-center justify-center font-sans leading-none shadow-sm`}>
+                {currentLangConfig.icon}
+              </span>
+              <span>{currentLangConfig.filename}</span>
+            </div>
+
+            {/* Language Selector Dropdown */}
+            <div className="relative flex items-center">
+              <select
+                value={selectedLanguage}
+                onChange={(e) => handleLanguageChange(e.target.value)}
+                className="bg-slate-900/90 hover:bg-slate-800 text-indigo-300 font-sans font-medium text-[11px] rounded-md border border-slate-700/80 px-2 py-0.5 pr-5 cursor-pointer focus:outline-none focus:ring-1 focus:ring-indigo-400 appearance-none transition-colors"
+                title="Switch Programming Language"
+              >
+                {SUPPORTED_LANGUAGES.map((lang) => (
+                  <option key={lang.id} value={lang.id} className="bg-slate-900 text-slate-200 font-sans">
+                    {lang.name}
+                  </option>
+                ))}
+              </select>
+              <span className="material-symbols-outlined absolute right-1 pointer-events-none text-slate-400 text-[14px]">
+                expand_more
+              </span>
+            </div>
           </div>
+
           <div className="flex items-center gap-3 text-slate-500 text-[11px]">
-            <span>JavaScript</span>
-            <span className="text-slate-700">•</span>
+            <span className="hidden md:inline font-sans text-slate-400">{currentLangConfig.name}</span>
+            <span className="hidden md:inline text-slate-700">•</span>
             <span className="flex items-center gap-1 text-emerald-400/90">
               <span className={`w-1.5 h-1.5 rounded-full ${socketConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
               {socketConnected ? 'Synced' : 'Connecting...'}
@@ -1080,7 +1307,7 @@ export default function CollaborativeRoomPage() {
           <Editor
             height="100%"
             defaultLanguage="javascript"
-            language="javascript"
+            language={currentLangConfig.monacoLang}
             theme="vs-dark"
             value={code}
             onChange={handleEditorChange}
