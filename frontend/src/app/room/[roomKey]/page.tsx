@@ -538,7 +538,7 @@ export default function CollaborativeRoomPage() {
       isRemoteUpdateRef.current = false;
       return;
     }
-    isTypingRef.current = true;
+    setCode(updatedCode);
     codeRef.current = updatedCode;
     setSaveStatus('unsaved');
 
@@ -550,10 +550,9 @@ export default function CollaborativeRoomPage() {
       saveCodeToDb(updatedCode, false);
     }, 2500);
 
-    // Read live editor cursor position immediately
-    const pos = editorRef.current ? editorRef.current.getPosition() : null;
-
+    // Broadcast code update immediately with live editor cursor position
     if (socketRef.current && socketRef.current.connected) {
+      const pos = editorRef.current ? editorRef.current.getPosition() : null;
       socketRef.current.emit('code:update', {
         roomKey,
         codeContent: updatedCode,
@@ -566,11 +565,6 @@ export default function CollaborativeRoomPage() {
         user: currentUserRef.current,
       });
     }
-
-    // Reset typing flag
-    setTimeout(() => {
-      isTypingRef.current = false;
-    }, 50);
   };
 
   // Download code as .js file export
@@ -1088,17 +1082,24 @@ export default function CollaborativeRoomPage() {
             defaultLanguage="javascript"
             language="javascript"
             theme="vs-dark"
-            defaultValue={codeRef.current}
+            value={code}
             onChange={handleEditorChange}
             onMount={(editor, monaco) => {
               editorRef.current = editor;
               monacoRef.current = monaco;
 
-              if (codeRef.current) {
-                const model = editor.getModel();
-                if (model && model.getValue() !== codeRef.current) {
-                  model.setValue(codeRef.current);
-                }
+              // Force remeasure fonts to prevent character misalignment
+              try {
+                monaco.editor.remeasureFonts();
+              } catch (e) {}
+
+              if (typeof document !== 'undefined' && 'fonts' in document) {
+                document.fonts.ready.then(() => {
+                  try {
+                    monaco.editor.remeasureFonts();
+                    editor.layout();
+                  } catch (e) {}
+                });
               }
 
               const emitCursorUpdate = (position: any, selection: any) => {
@@ -1130,29 +1131,29 @@ export default function CollaborativeRoomPage() {
                 emitCursorUpdate(startPos, editor.getSelection());
               }
 
-              // Synchronous cursor sync strictly on mouse clicks & arrow keys (when NOT typing)
+              // Synchronous cursor sync on clicks, typing, and arrow navigation
               editor.onDidChangeCursorPosition((e: any) => {
-                if (!isTypingRef.current) {
-                  emitCursorUpdate(e.position, editor.getSelection());
-                }
+                emitCursorUpdate(e.position, editor.getSelection());
               });
 
               // Synchronous text selection sync
               editor.onDidChangeCursorSelection((e: any) => {
-                if (!isTypingRef.current) {
-                  emitCursorUpdate(editor.getPosition(), e.selection);
-                }
+                emitCursorUpdate(editor.getPosition(), e.selection);
               });
             }}
             options={{
-              fontSize: 13,
-              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 14,
+              fontFamily: "Consolas, 'Courier New', monospace",
+              lineHeight: 21,
+              letterSpacing: 0,
               minimap: { enabled: false },
               scrollBeyondLastLine: false,
               wordWrap: 'on',
               lineNumbers: 'on',
               smoothScrolling: true,
               cursorBlinking: 'smooth',
+              cursorSmoothCaretAnimation: 'on',
+              cursorWidth: 2,
               automaticLayout: true,
               tabSize: 2,
               padding: { top: 12, bottom: 12 },
