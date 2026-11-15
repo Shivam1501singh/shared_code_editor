@@ -193,6 +193,10 @@ io.on('connection', (socket) => {
     socket.to(roomKey).emit('voice:peer-joined', { socketId: socket.id });
   });
 
+  socket.on('voice:leave', ({ roomKey }) => {
+    socket.to(roomKey).emit('voice:peer-left', { socketId: socket.id });
+  });
+
   socket.on('voice:offer', ({ roomKey, targetSocketId, sdp }) => {
     io.to(targetSocketId).emit('voice:offer', {
       senderSocketId: socket.id,

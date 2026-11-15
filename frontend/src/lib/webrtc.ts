@@ -1,13 +1,28 @@
 import { Socket } from 'socket.io-client';
 
+// Public STUN and OpenRelay TURN servers for 100% NAT/firewall traversal across any network
 const ICE_SERVERS: RTCConfiguration = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
-    { urls: 'stun:stun3.l.google.com:19302' },
-    { urls: 'stun:stun4.l.google.com:19302' },
     { urls: 'stun:stun.services.mozilla.com' },
+    // Free global TURN servers (UDP and TCP fallback)
+    {
+      urls: 'turn:openrelay.metered.ca:80',
+      username: 'openrelay',
+      credential: 'openrelay',
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443',
+      username: 'openrelay',
+      credential: 'openrelay',
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+      username: 'openrelay',
+      credential: 'openrelay',
+    },
   ],
   iceCandidatePoolSize: 10,
 };
@@ -16,12 +31,14 @@ export class WebRTCVoiceManager {
   private socket: Socket;
   private roomKey: string;
   private localStream: MediaStream | null = null;
+  private isMuted: boolean = false;
+
   private peerConnections: Map<string, RTCPeerConnection> = new Map();
   private audioElements: Map<string, HTMLAudioElement> = new Map();
   private dataChannels: Map<string, RTCDataChannel> = new Map();
   private iceCandidatesQueue: Map<string, RTCIceCandidateInit[]> = new Map();
+  private makingOfferMap: Map<string, boolean> = new Map();
   private keepAliveInterval: any = null;
-  private reconnectTimers: Map<string, any> = new Map();
 
   private audioContext: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
@@ -47,37 +64,51 @@ export class WebRTCVoiceManager {
   }
 
   private setupSocketListeners() {
-    // Peer announced readiness for voice
+    // A peer joined or requested voice connection
     this.socket.on('voice:peer-joined', async ({ socketId }: { socketId: string }) => {
-      console.log(`[WebRTC] Peer joined voice channel: ${socketId}`);
+      console.log(`[WebRTC] Peer requested voice connection: ${socketId}`);
       if (this.localStream) {
-        await this.createPeerConnection(socketId, true);
+        await this.getOrCreatePeerConnection(socketId, true);
       }
     });
 
-    // Received SDP Offer from peer
+    // Received SDP Offer from peer (Handles Perfect Negotiation)
     this.socket.on('voice:offer', async ({ senderSocketId, sdp }: { senderSocketId: string; sdp: RTCSessionDescriptionInit }) => {
       console.log(`[WebRTC] Received offer from ${senderSocketId}`);
-      let pc = this.peerConnections.get(senderSocketId);
-      if (!pc || pc.signalingState === 'closed') {
-        pc = await this.createPeerConnection(senderSocketId, false);
-      }
-      if (pc) {
-        try {
+      const pc = await this.getOrCreatePeerConnection(senderSocketId, false);
+      if (!pc) return;
+
+      try {
+        const isPolite = (this.socket.id || '') < senderSocketId;
+        const makingOffer = this.makingOfferMap.get(senderSocketId) || false;
+        const offerCollision = makingOffer || pc.signalingState !== 'stable';
+
+        if (offerCollision) {
+          if (!isPolite) {
+            console.log(`[WebRTC] Impolite peer ignoring offer collision from ${senderSocketId}`);
+            return;
+          }
+          console.log(`[WebRTC] Polite peer rolling back for offer from ${senderSocketId}`);
+          await Promise.all([
+            pc.setLocalDescription({ type: 'rollback' }),
+            pc.setRemoteDescription(new RTCSessionDescription(sdp)),
+          ]);
+        } else {
           await pc.setRemoteDescription(new RTCSessionDescription(sdp));
-          await this.processQueuedCandidates(senderSocketId, pc);
-
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-
-          this.socket.emit('voice:answer', {
-            roomKey: this.roomKey,
-            targetSocketId: senderSocketId,
-            sdp: answer,
-          });
-        } catch (err) {
-          console.error('[WebRTC] Error handling SDP offer:', err);
         }
+
+        await this.processQueuedCandidates(senderSocketId, pc);
+
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+
+        this.socket.emit('voice:answer', {
+          roomKey: this.roomKey,
+          targetSocketId: senderSocketId,
+          sdp: answer,
+        });
+      } catch (err) {
+        console.error('[WebRTC] Error handling offer:', err);
       }
     });
 
@@ -85,13 +116,13 @@ export class WebRTCVoiceManager {
     this.socket.on('voice:answer', async ({ senderSocketId, sdp }: { senderSocketId: string; sdp: RTCSessionDescriptionInit }) => {
       console.log(`[WebRTC] Received answer from ${senderSocketId}`);
       const pc = this.peerConnections.get(senderSocketId);
-      if (pc && pc.signalingState !== 'closed') {
-        try {
-          await pc.setRemoteDescription(new RTCSessionDescription(sdp));
-          await this.processQueuedCandidates(senderSocketId, pc);
-        } catch (err) {
-          console.error('[WebRTC] Error handling SDP answer:', err);
-        }
+      if (!pc || pc.signalingState === 'closed') return;
+
+      try {
+        await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+        await this.processQueuedCandidates(senderSocketId, pc);
+      } catch (err) {
+        console.error('[WebRTC] Error handling answer:', err);
       }
     });
 
@@ -100,7 +131,11 @@ export class WebRTCVoiceManager {
       await this.addIceCandidate(senderSocketId, candidate);
     });
 
-    // Peer disconnected
+    // Peer disconnected or left voice
+    this.socket.on('voice:peer-left', ({ socketId }: { socketId: string }) => {
+      this.closePeerConnection(socketId);
+    });
+
     this.socket.on('user:left', ({ socketId }: { socketId: string }) => {
       this.closePeerConnection(socketId);
     });
@@ -110,7 +145,6 @@ export class WebRTCVoiceManager {
     if (!candidate) return;
     const pc = this.peerConnections.get(senderSocketId);
 
-    // If remote description is already set, add immediately
     if (pc && pc.remoteDescription && pc.remoteDescription.type) {
       try {
         await pc.addIceCandidate(new RTCIceCandidate(candidate));
@@ -118,7 +152,6 @@ export class WebRTCVoiceManager {
         console.error('[WebRTC] Error adding ICE candidate:', err);
       }
     } else {
-      // Queue candidate until remote description is ready (prevents dropped connections)
       const queue = this.iceCandidatesQueue.get(senderSocketId) || [];
       queue.push(candidate);
       this.iceCandidatesQueue.set(senderSocketId, queue);
@@ -139,30 +172,9 @@ export class WebRTCVoiceManager {
     }
   }
 
-  private setupDataChannel(peerSocketId: string, channel: RTCDataChannel) {
-    this.dataChannels.set(peerSocketId, channel);
-
-    channel.onopen = () => {
-      console.log(`[WebRTC] NAT Keepalive channel opened with ${peerSocketId}`);
-    };
-
-    channel.onmessage = (event) => {
-      // Periodic ping-pong packet to prevent router NAT timeout
-      if (event.data === 'ping') {
-        try {
-          channel.send('pong');
-        } catch (e) {}
-      }
-    };
-
-    channel.onclose = () => {
-      this.dataChannels.delete(peerSocketId);
-    };
-  }
-
   private startKeepAlive() {
-    // Send a keepalive packet every 5 seconds over active data channels to prevent NAT UDP timeouts
     if (this.keepAliveInterval) clearInterval(this.keepAliveInterval);
+    // Ping every 4 seconds to guarantee zero UDP NAT timeouts during silence
     this.keepAliveInterval = setInterval(() => {
       this.dataChannels.forEach((dc) => {
         if (dc.readyState === 'open') {
@@ -171,80 +183,97 @@ export class WebRTCVoiceManager {
           } catch (e) {}
         }
       });
-    }, 5000);
+    }, 4000);
   }
 
-  private async createPeerConnection(peerSocketId: string, isInitiator: boolean): Promise<RTCPeerConnection> {
-    // Clean up any existing connection for this peer
-    if (this.peerConnections.has(peerSocketId)) {
-      const oldPc = this.peerConnections.get(peerSocketId);
-      oldPc?.close();
-      this.peerConnections.delete(peerSocketId);
+  private async getOrCreatePeerConnection(peerSocketId: string, shouldInitiate: boolean): Promise<RTCPeerConnection> {
+    let pc = this.peerConnections.get(peerSocketId);
+
+    if (pc && pc.signalingState !== 'closed') {
+      if (shouldInitiate && pc.signalingState === 'stable') {
+        this.negotiate(peerSocketId, pc);
+      }
+      return pc;
     }
 
-    const pc = new RTCPeerConnection(ICE_SERVERS);
+    pc = new RTCPeerConnection(ICE_SERVERS);
     this.peerConnections.set(peerSocketId, pc);
+    this.makingOfferMap.set(peerSocketId, false);
 
     // Add local microphone audio tracks
     if (this.localStream) {
       this.localStream.getAudioTracks().forEach((track) => {
-        pc.addTrack(track, this.localStream!);
+        pc!.addTrack(track, this.localStream!);
       });
     }
 
-    // Set up bidirectional keepalive data channel (negotiated ID 0 prevents negotiation mismatch)
+    // Bidirectional NAT keepalive data channel (negotiated channel id 0 prevents renegotiation stalls)
     const dc = pc.createDataChannel('keepalive', { negotiated: true, id: 0 });
-    this.setupDataChannel(peerSocketId, dc);
+    this.dataChannels.set(peerSocketId, dc);
 
-    // Handle remote audio stream
+    dc.onmessage = (event) => {
+      if (event.data === 'ping') {
+        try {
+          dc.send('pong');
+        } catch (e) {}
+      }
+    };
+
+    dc.onclose = () => {
+      this.dataChannels.delete(peerSocketId);
+    };
+
+    // Attach remote audio track
     pc.ontrack = (event) => {
-      console.log(`[WebRTC] Remote audio track received from ${peerSocketId}`);
+      console.log(`[WebRTC] Remote track received from ${peerSocketId}`);
       const [remoteStream] = event.streams;
 
       let audio = this.audioElements.get(peerSocketId);
       if (!audio) {
         audio = document.createElement('audio');
-        audio.id = `webrtc-remote-audio-${peerSocketId}`;
+        audio.id = `webrtc-audio-${peerSocketId}`;
         audio.autoplay = true;
-        audio.style.display = 'none';
+        // Plays inline on mobile/desktop without being paused by background tab heuristics
+        (audio as any).playsInline = true;
+        // Place in DOM offscreen (NEVER display: none, which causes Chrome to pause audio)
+        audio.style.position = 'fixed';
+        audio.style.bottom = '-9999px';
+        audio.style.left = '-9999px';
+        audio.style.width = '1px';
+        audio.style.height = '1px';
+        audio.style.opacity = '0.001';
+        audio.style.pointerEvents = 'none';
         document.body.appendChild(audio);
         this.audioElements.set(peerSocketId, audio);
-
-        // Keep audio alive even during prolonged silence
-        audio.onpause = () => {
-          if (this.peerConnections.has(peerSocketId)) {
-            audio?.play().catch(() => {});
-          }
-        };
       }
 
       audio.srcObject = remoteStream;
 
-      // Handle unmuting of remote track
+      const playAudio = () => {
+        if (audio && audio.paused) {
+          audio.play().catch((err) => {
+            console.warn('[WebRTC] Autoplay prevented, unlocking on interaction', err);
+            const unlock = () => {
+              audio?.play().catch(() => {});
+              window.removeEventListener('click', unlock);
+              window.removeEventListener('keydown', unlock);
+            };
+            window.addEventListener('click', unlock, { once: true });
+            window.addEventListener('keydown', unlock, { once: true });
+          });
+        }
+      };
+
+      // Ensure audio stays playing through silence and track unmutes
+      audio.onpause = playAudio;
+      audio.onstalled = playAudio;
+      audio.onwaiting = playAudio;
+
       remoteStream.getAudioTracks().forEach((track) => {
-        track.onunmute = () => {
-          console.log(`[WebRTC] Track unmuted from ${peerSocketId}, playing audio`);
-          audio?.play().catch(() => {});
-        };
-        track.onmute = () => {
-          console.log(`[WebRTC] Track muted from ${peerSocketId}`);
-        };
+        track.onunmute = playAudio;
       });
 
-      // Explicit play trigger with user gesture unlock
-      const playPromise = audio.play();
-      if (playPromise !== undefined) {
-        playPromise.catch((err) => {
-          console.warn('[WebRTC] Autoplay deferred until user interaction', err);
-          const unlock = () => {
-            audio?.play().catch(() => {});
-            window.removeEventListener('click', unlock);
-            window.removeEventListener('keydown', unlock);
-          };
-          window.addEventListener('click', unlock, { once: true });
-          window.addEventListener('keydown', unlock, { once: true });
-        });
-      }
+      playAudio();
     };
 
     // Send local ICE candidates to peer
@@ -257,62 +286,45 @@ export class WebRTCVoiceManager {
       }
     };
 
-    // Self-healing automatic ICE reconnection
+    // Handle ICE connection state changes
     pc.oniceconnectionstatechange = () => {
-      const state = pc.iceConnectionState;
-      console.log(`[WebRTC] ICE state for ${peerSocketId}: ${state}`);
-
-      if (state === 'disconnected' || state === 'failed') {
-        console.warn(`[WebRTC] Connection degraded (${state}) with ${peerSocketId}. Initiating self-healing reconnection...`);
-        if (!this.reconnectTimers.has(peerSocketId)) {
-          const timer = setTimeout(async () => {
-            this.reconnectTimers.delete(peerSocketId);
-            if (this.localStream && (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed')) {
-              try {
-                const offer = await pc.createOffer({ iceRestart: true });
-                await pc.setLocalDescription(offer);
-                this.socket.emit('voice:offer', {
-                  roomKey: this.roomKey,
-                  targetSocketId: peerSocketId,
-                  sdp: offer,
-                });
-              } catch (err) {
-                console.error('[WebRTC] ICE restart offer failed:', err);
-              }
-            }
-          }, 1500);
-          this.reconnectTimers.set(peerSocketId, timer);
-        }
-      } else if (state === 'connected' || state === 'completed') {
-        if (this.reconnectTimers.has(peerSocketId)) {
-          clearTimeout(this.reconnectTimers.get(peerSocketId));
-          this.reconnectTimers.delete(peerSocketId);
-        }
+      console.log(`[WebRTC] ICE Connection State for ${peerSocketId}: ${pc!.iceConnectionState}`);
+      if (pc!.iceConnectionState === 'failed') {
+        pc!.restartIce();
       }
     };
 
-    if (isInitiator) {
-      try {
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        this.socket.emit('voice:offer', {
-          roomKey: this.roomKey,
-          targetSocketId: peerSocketId,
-          sdp: offer,
-        });
-      } catch (err) {
-        console.error('[WebRTC] Error creating offer:', err);
-      }
+    if (shouldInitiate) {
+      await this.negotiate(peerSocketId, pc);
     }
 
     return pc;
   }
 
+  private async negotiate(peerSocketId: string, pc: RTCPeerConnection) {
+    try {
+      this.makingOfferMap.set(peerSocketId, true);
+      const offer = await pc.createOffer();
+      if (pc.signalingState !== 'stable') return;
+      await pc.setLocalDescription(offer);
+
+      this.socket.emit('voice:offer', {
+        roomKey: this.roomKey,
+        targetSocketId: peerSocketId,
+        sdp: offer,
+      });
+    } catch (err) {
+      console.error('[WebRTC] Error during negotiation offer:', err);
+    } finally {
+      this.makingOfferMap.set(peerSocketId, false);
+    }
+  }
+
   public async startAudio(): Promise<boolean> {
     try {
       if (this.localStream) {
-        // If stream already exists, make sure tracks are active
         this.localStream.getAudioTracks().forEach((t) => (t.enabled = true));
+        this.isMuted = false;
         return true;
       }
 
@@ -326,21 +338,67 @@ export class WebRTCVoiceManager {
       });
 
       this.localStream = stream;
+      this.isMuted = false;
       this.setupVolumeMeter(stream);
 
-      // Add tracks to any existing peer connections
-      this.peerConnections.forEach((pc) => {
+      // Add audio tracks to all existing peer connections
+      this.peerConnections.forEach((pc, peerId) => {
         stream.getAudioTracks().forEach((track) => {
           pc.addTrack(track, stream);
         });
+        this.negotiate(peerId, pc);
       });
 
-      // Signal to room that local user joined voice channel
+      // Announce readiness to all peers in the room
       this.socket.emit('voice:join', { roomKey: this.roomKey });
       return true;
     } catch (err) {
       console.error('[WebRTC] Microphone access denied or unavailable', err);
       return false;
+    }
+  }
+
+  public stopAudio() {
+    if (this.animationFrameId) {
+      cancelAnimationFrame(this.animationFrameId);
+      this.animationFrameId = null;
+    }
+
+    if (this.audioContext && this.audioContext.state !== 'closed') {
+      this.audioContext.close().catch(() => {});
+      this.audioContext = null;
+    }
+
+    if (this.localStream) {
+      this.localStream.getTracks().forEach((track) => track.stop());
+      this.localStream = null;
+    }
+
+    this.isMuted = false;
+
+    // Notify peers that local user left voice channel
+    this.socket.emit('voice:leave', { roomKey: this.roomKey });
+
+    this.peerConnections.forEach((pc) => pc.close());
+    this.peerConnections.clear();
+
+    this.dataChannels.forEach((dc) => {
+      try {
+        dc.close();
+      } catch (e) {}
+    });
+    this.dataChannels.clear();
+
+    this.audioElements.forEach((audio) => {
+      audio.srcObject = null;
+      audio.remove();
+    });
+    this.audioElements.clear();
+    this.iceCandidatesQueue.clear();
+    this.makingOfferMap.clear();
+
+    if (this.onSpeakingChange) {
+      this.onSpeakingChange(false);
     }
   }
 
@@ -358,15 +416,13 @@ export class WebRTCVoiceManager {
 
       const bufferLength = this.analyser.frequencyBinCount;
       const dataArray = new Uint8Array(bufferLength);
-
       let wasSpeaking = false;
 
       const checkVolume = () => {
-        if (!this.analyser) return;
+        if (!this.analyser || !this.localStream) return;
 
-        // Skip meter calculation if tracks are muted
-        const isTrackEnabled = this.localStream?.getAudioTracks()[0]?.enabled ?? false;
-        if (!isTrackEnabled) {
+        // When muted, immediately broadcast false and skip audio processing
+        if (this.isMuted) {
           if (wasSpeaking) {
             wasSpeaking = false;
             this.onSpeakingChange?.(false);
@@ -383,7 +439,7 @@ export class WebRTCVoiceManager {
           sum += dataArray[i];
         }
         const average = sum / bufferLength;
-        const isSpeaking = average > 25; // Sensitivity threshold
+        const isSpeaking = average > 22; // Threshold for natural voice
 
         if (isSpeaking !== wasSpeaking) {
           wasSpeaking = isSpeaking;
@@ -410,29 +466,23 @@ export class WebRTCVoiceManager {
     const tracks = this.localStream.getAudioTracks();
     if (!tracks || tracks.length === 0) return true;
 
-    // Check if track ended
-    if (tracks[0].readyState === 'ended') {
-      console.warn('[WebRTC] Microphone track ended, re-acquiring stream');
-      this.startAudio();
-      return false;
-    }
+    // Toggle mute flag
+    this.isMuted = !this.isMuted;
 
-    const newEnabled = !tracks[0].enabled;
+    // Toggle track enablement
     tracks.forEach((track) => {
-      track.enabled = newEnabled;
+      track.enabled = !this.isMuted;
     });
 
-    const isMuted = !newEnabled;
-
-    // Resume AudioContext when unmuting
-    if (!isMuted && this.audioContext && this.audioContext.state === 'suspended') {
+    if (this.audioContext && this.audioContext.state === 'suspended' && !this.isMuted) {
       this.audioContext.resume().catch(() => {});
     }
 
-    if (isMuted && this.onSpeakingChange) {
+    if (this.isMuted && this.onSpeakingChange) {
       this.onSpeakingChange(false);
     }
 
+    // Broadcast mute state immediately to all room collaborators
     this.socket.emit('voice:speaking', {
       roomKey: this.roomKey,
       isSpeaking: false,
@@ -440,18 +490,13 @@ export class WebRTCVoiceManager {
 
     this.socket.emit('voice:mute-status', {
       roomKey: this.roomKey,
-      isMuted,
+      isMuted: this.isMuted,
     });
 
-    return isMuted;
+    return this.isMuted;
   }
 
   private closePeerConnection(socketId: string) {
-    if (this.reconnectTimers.has(socketId)) {
-      clearTimeout(this.reconnectTimers.get(socketId));
-      this.reconnectTimers.delete(socketId);
-    }
-
     const dc = this.dataChannels.get(socketId);
     if (dc) {
       try {
@@ -474,39 +519,14 @@ export class WebRTCVoiceManager {
     }
 
     this.iceCandidatesQueue.delete(socketId);
+    this.makingOfferMap.delete(socketId);
   }
 
   public destroy() {
+    this.stopAudio();
     if (this.keepAliveInterval) {
       clearInterval(this.keepAliveInterval);
       this.keepAliveInterval = null;
     }
-    this.reconnectTimers.forEach((timer) => clearTimeout(timer));
-    this.reconnectTimers.clear();
-
-    if (this.animationFrameId) {
-      cancelAnimationFrame(this.animationFrameId);
-    }
-    if (this.audioContext && this.audioContext.state !== 'closed') {
-      this.audioContext.close();
-    }
-    if (this.localStream) {
-      this.localStream.getTracks().forEach((track) => track.stop());
-      this.localStream = null;
-    }
-    this.dataChannels.forEach((dc) => {
-      try {
-        dc.close();
-      } catch (e) {}
-    });
-    this.dataChannels.clear();
-    this.peerConnections.forEach((pc) => pc.close());
-    this.peerConnections.clear();
-    this.audioElements.forEach((audio) => {
-      audio.srcObject = null;
-      audio.remove();
-    });
-    this.audioElements.clear();
-    this.iceCandidatesQueue.clear();
   }
 }

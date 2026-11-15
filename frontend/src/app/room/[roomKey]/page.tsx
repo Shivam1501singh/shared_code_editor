@@ -760,18 +760,26 @@ export default function CollaborativeRoomPage() {
   };
 
   // Start or Join WebRTC Audio
-  const toggleVoiceChannel = async () => {
+  const startVoiceChannel = async () => {
     if (!voiceManagerRef.current) return;
-    if (!isVoiceActive) {
-      const ok = await voiceManagerRef.current.startAudio();
-      if (ok) {
-        setIsVoiceActive(true);
-        setIsMuted(false);
-      }
-    } else {
-      const muted = voiceManagerRef.current.toggleMute();
-      setIsMuted(muted);
+    const ok = await voiceManagerRef.current.startAudio();
+    if (ok) {
+      setIsVoiceActive(true);
+      setIsMuted(false);
     }
+  };
+
+  const toggleMute = () => {
+    if (!voiceManagerRef.current || !isVoiceActive) return;
+    const muted = voiceManagerRef.current.toggleMute();
+    setIsMuted(muted);
+  };
+
+  const leaveVoiceChannel = () => {
+    if (!voiceManagerRef.current) return;
+    voiceManagerRef.current.stopAudio();
+    setIsVoiceActive(false);
+    setIsMuted(false);
   };
 
   // Multi-Language Code Execution (JavaScript sandboxed locally, Python/Java/C/C++ via Judge0)
@@ -1236,29 +1244,47 @@ export default function CollaborativeRoomPage() {
               </div>
             )}
 
-            {/* Mic Toggle Button */}
-            <button
-              onClick={toggleVoiceChannel}
-              type="button"
-              className={`w-6 h-6 rounded-full flex items-center justify-center transition-all cursor-pointer shadow-sm active:scale-90 ${
-                !isVoiceActive
-                  ? 'bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200'
-                  : isMuted
-                  ? 'bg-rose-950/90 text-rose-400 border border-rose-600/50 hover:bg-rose-900 shadow-[0_0_8px_rgba(244,63,94,0.3)]'
-                  : 'bg-emerald-950/90 text-emerald-400 border border-emerald-500/50 hover:bg-emerald-900 shadow-[0_0_8px_rgba(16,185,129,0.3)]'
-              }`}
-              title={
-                !isVoiceActive
-                  ? 'Click to start WebRTC Voice'
-                  : isMuted
-                  ? 'Microphone muted (Click to unmute)'
-                  : 'Microphone active (Click to mute)'
-              }
-            >
-              <span className="material-symbols-outlined text-[14px]">
-                {!isVoiceActive ? 'mic_none' : isMuted ? 'mic_off' : 'mic'}
-              </span>
-            </button>
+            {/* Voice Control Buttons */}
+            {!isVoiceActive ? (
+              <button
+                onClick={startVoiceChannel}
+                type="button"
+                className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-all cursor-pointer text-xs"
+                title="Join WebRTC Voice Channel"
+              >
+                <span className="material-symbols-outlined text-[15px] text-emerald-400">call</span>
+                <span className="hidden sm:inline text-[11px] font-medium">Join Voice</span>
+              </button>
+            ) : (
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={toggleMute}
+                  type="button"
+                  className={`w-6 h-6 rounded-full flex items-center justify-center transition-all cursor-pointer shadow-sm active:scale-90 ${
+                    isMuted
+                      ? 'bg-rose-950/90 text-rose-400 border border-rose-600/50 hover:bg-rose-900 shadow-[0_0_8px_rgba(244,63,94,0.3)]'
+                      : 'bg-emerald-950/90 text-emerald-400 border border-emerald-500/50 hover:bg-emerald-900 shadow-[0_0_8px_rgba(16,185,129,0.3)]'
+                  }`}
+                  title={
+                    isMuted
+                      ? 'Microphone muted (Click to unmute)'
+                      : 'Microphone active (Click to mute)'
+                  }
+                >
+                  <span className="material-symbols-outlined text-[14px]">
+                    {isMuted ? 'mic_off' : 'mic'}
+                  </span>
+                </button>
+                <button
+                  onClick={leaveVoiceChannel}
+                  type="button"
+                  className="w-6 h-6 rounded-full bg-rose-600/20 hover:bg-rose-600 text-rose-400 hover:text-white border border-rose-500/40 flex items-center justify-center transition-all cursor-pointer shadow-sm active:scale-90"
+                  title="Leave Voice Channel"
+                >
+                  <span className="material-symbols-outlined text-[13px]">call_end</span>
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Download / Export Code Button */}
