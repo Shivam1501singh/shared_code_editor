@@ -127,6 +127,32 @@ export default function DashboardPage() {
     }
   };
 
+  const [roomToDelete, setRoomToDelete] = useState<Room | null>(null);
+  const [isDeletingRoom, setIsDeletingRoom] = useState(false);
+
+  const confirmDeleteRoom = async () => {
+    if (!roomToDelete) return;
+    try {
+      setIsDeletingRoom(true);
+      const res = await fetch(`/api/rooms/${roomToDelete.roomKey}`, {
+        method: 'DELETE',
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        showToast(`Room "${roomToDelete.title}" deleted.`);
+        setCreatedRooms((prev) => prev.filter((r) => r.roomKey !== roomToDelete.roomKey));
+        setJoinedRooms((prev) => prev.filter((r) => r.roomKey !== roomToDelete.roomKey));
+        setRoomToDelete(null);
+      } else {
+        showToast(json.error || 'Failed to delete room');
+      }
+    } catch {
+      showToast('Network error while deleting room');
+    } finally {
+      setIsDeletingRoom(false);
+    }
+  };
+
   const displayedRooms = activeTab === 'created' ? createdRooms : joinedRooms;
   const filteredRooms = displayedRooms.filter((r) => {
     const q = searchQuery.toLowerCase();
@@ -474,6 +500,22 @@ export default function DashboardPage() {
                             {room.title}
                           </h3>
                         </div>
+
+                        {/* Top quick delete button for created rooms */}
+                        {activeTab === 'created' && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setRoomToDelete(room);
+                            }}
+                            className="p-1.5 rounded-lg text-[#908fa0] hover:text-rose-400 hover:bg-rose-500/10 border border-transparent hover:border-rose-500/20 transition-all opacity-70 group-hover:opacity-100 cursor-pointer"
+                            title={`Delete room "${room.title}"`}
+                          >
+                            <span className="material-symbols-outlined text-[18px]">delete_outline</span>
+                          </button>
+                        )}
                       </div>
 
                       {/* Token copy pill */}
@@ -496,13 +538,31 @@ export default function DashboardPage() {
                         })}
                       </div>
 
-                      <Link
-                        href={`/room/${room.roomKey}`}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#8083ff] text-[#1000a9] text-xs font-semibold shadow hover:brightness-110 transition-all"
-                      >
-                        <span>Open Editor</span>
-                        <span className="material-symbols-outlined text-[16px]">open_in_new</span>
-                      </Link>
+                      <div className="flex items-center gap-2">
+                        {activeTab === 'created' && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setRoomToDelete(room);
+                            }}
+                            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 border border-rose-500/20 text-xs font-medium transition-all cursor-pointer"
+                            title={`Delete room "${room.title}"`}
+                          >
+                            <span className="material-symbols-outlined text-[15px]">delete</span>
+                            <span className="hidden sm:inline">Delete</span>
+                          </button>
+                        )}
+
+                        <Link
+                          href={`/room/${room.roomKey}`}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#8083ff] text-[#1000a9] text-xs font-semibold shadow hover:brightness-110 transition-all"
+                        >
+                          <span>Open Editor</span>
+                          <span className="material-symbols-outlined text-[16px]">open_in_new</span>
+                        </Link>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -510,6 +570,64 @@ export default function DashboardPage() {
             )}
           </div>
         </div>
+
+        {/* Delete Confirmation Modal */}
+        {roomToDelete && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
+            <div className="bg-[#171b26] border border-[#464554]/40 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 flex items-center justify-center shrink-0">
+                  <span className="material-symbols-outlined text-[22px]">warning</span>
+                </div>
+                <div>
+                  <h3 className="text-base font-semibold text-[#dfe2f1]">
+                    Delete Workspace Room?
+                  </h3>
+                  <p className="text-xs text-[#c7c4d7] mt-1">
+                    Are you sure you want to delete{' '}
+                    <span className="font-semibold text-white">"{roomToDelete.title}"</span>?
+                  </p>
+                </div>
+              </div>
+
+              <div className="p-3 rounded-lg bg-[#0a0e18] border border-[#464554]/20 text-[11px] font-mono text-[#c7c4d7] space-y-1">
+                <div>Room Key: <span className="text-[#8083ff]">{roomToDelete.roomKey}</span></div>
+                <div className="text-rose-400 text-[10px]">
+                  ⚠️ This action is permanent. All saved code, snapshots, and collaborator access for this room will be deleted.
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  disabled={isDeletingRoom}
+                  onClick={() => setRoomToDelete(null)}
+                  className="px-4 py-2 rounded-lg bg-[#262a35] hover:bg-[#313540] text-[#dfe2f1] text-xs font-medium transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={isDeletingRoom}
+                  onClick={confirmDeleteRoom}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold shadow-lg shadow-rose-600/30 transition-all cursor-pointer disabled:opacity-50"
+                >
+                  {isDeletingRoom ? (
+                    <>
+                      <span className="material-symbols-outlined text-[16px] animate-spin">progress_activity</span>
+                      <span>Deleting...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="material-symbols-outlined text-[16px]">delete_forever</span>
+                      <span>Delete Room</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </main>
     </div>
   );

@@ -114,3 +114,56 @@ export async function PATCH(
     return NextResponse.json({ success: false, error: 'Failed to update room' }, { status: 500 });
   }
 }
+
+export async function DELETE(
+  req: Request,
+  { params }: { params: Promise<{ roomKey: string }> }
+) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session || !session.user || !session.user.id) {
+      return NextResponse.json(
+        { success: false, error: 'Authentication required to delete a room' },
+        { status: 401 }
+      );
+    }
+
+    const { roomKey } = await params;
+
+    const room = await prisma.room.findUnique({
+      where: { roomKey },
+      select: { id: true, hostId: true, title: true },
+    });
+
+    if (!room) {
+      return NextResponse.json(
+        { success: false, error: 'Room not found' },
+        { status: 404 }
+      );
+    }
+
+    // Security check: Only the host (creator) is authorized to delete the room
+    if (room.hostId !== session.user.id) {
+      return NextResponse.json(
+        { success: false, error: 'Only the creator/host can delete this room' },
+        { status: 403 }
+      );
+    }
+
+    // Delete the room — Prisma schema cascade deletes associated RoomMember & CodeSnapshot entries
+    await prisma.room.delete({
+      where: { roomKey },
+    });
+
+    return NextResponse.json({
+      success: true,
+      message: `Room "${room.title}" was successfully deleted`,
+    });
+  } catch (error) {
+    console.error('Error deleting room:', error);
+    return NextResponse.json(
+      { success: false, error: 'Failed to delete room' },
+      { status: 500 }
+    );
+  }
+}

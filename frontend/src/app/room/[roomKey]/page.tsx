@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import { useSession } from 'next-auth/react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { io, Socket } from 'socket.io-client';
 import Link from 'next/link';
 import { WebRTCVoiceManager } from '@/lib/webrtc';
@@ -100,9 +100,13 @@ interface AIAnalysis {
 }
 
 export default function CollaborativeRoomPage() {
+  const router = useRouter();
   const params = useParams();
   const roomKey = params?.roomKey as string;
   const { data: session } = useSession();
+
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [isDeletingRoom, setIsDeletingRoom] = useState(false);
 
   const [code, setCode] = useState<string>('// Loading collaborative editor...');
   const codeRef = useRef<string>('// Loading collaborative editor...');
@@ -357,6 +361,11 @@ export default function CollaborativeRoomPage() {
       if (data.messages && Array.isArray(data.messages)) {
         setChatMessages(data.messages);
       }
+    });
+
+    socket.on('room:deleted', (data: { message?: string }) => {
+      alert(data?.message || 'This workspace was deleted by the host.');
+      router.push('/dashboard');
     });
 
     socket.on('user:joined', ({ user }) => {
@@ -782,6 +791,31 @@ export default function CollaborativeRoomPage() {
     setIsMuted(false);
   };
 
+  const handleDeleteRoom = async () => {
+    if (!isHost) return;
+    try {
+      setIsDeletingRoom(true);
+      const res = await fetch(`/api/rooms/${roomKey}`, {
+        method: 'DELETE',
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        if (socketRef.current?.connected) {
+          socketRef.current.emit('room:delete', { roomKey });
+        }
+        router.push('/dashboard');
+      } else {
+        alert(json.error || 'Failed to delete room');
+      }
+    } catch (err) {
+      console.error('Failed to delete room:', err);
+      alert('Error deleting room');
+    } finally {
+      setIsDeletingRoom(false);
+      setShowDeleteModal(false);
+    }
+  };
+
   // Multi-Language Code Execution (JavaScript sandboxed locally, Python/Java/C/C++ via Judge0)
   const executeCode = useCallback(async () => {
     setIsExecuting(true);
@@ -1198,6 +1232,21 @@ export default function CollaborativeRoomPage() {
               <span className="absolute -bottom-8 left-1/2 -translate-x-1/2 bg-slate-800 text-slate-200 border border-slate-700 font-sans text-[11px] px-2 py-0.5 rounded shadow-xl whitespace-nowrap z-50">
                 Copied to clipboard!
               </span>
+            )}
+            {/* Host Delete Workspace Action */}
+            {isHost && (
+              <>
+                <div className="w-px h-3 bg-slate-800 mx-1.5" />
+                <button
+                  type="button"
+                  onClick={() => setShowDeleteModal(true)}
+                  className="flex items-center gap-1 text-[11px] text-rose-400 hover:text-rose-300 transition-colors cursor-pointer"
+                  title="Delete Workspace (Host only)"
+                >
+                  <span className="material-symbols-outlined text-[13px]">delete</span>
+                  <span className="hidden sm:inline font-sans">Delete</span>
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -1866,6 +1915,63 @@ export default function CollaborativeRoomPage() {
           </div>
         )}
       </footer>
+
+      {/* Host Room Deletion Modal */}
+      {showDeleteModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in duration-200 font-sans">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 flex items-center justify-center shrink-0">
+                <span className="material-symbols-outlined text-[22px]">warning</span>
+              </div>
+              <div>
+                <h3 className="text-base font-semibold text-white">
+                  Delete Workspace?
+                </h3>
+                <p className="text-xs text-slate-400 mt-1">
+                  Are you sure you want to delete <span className="font-semibold text-white">"{roomTitle}"</span>?
+                </p>
+              </div>
+            </div>
+
+            <div className="p-3 rounded-lg bg-slate-950 border border-slate-800 text-[11px] font-mono text-slate-400 space-y-1">
+              <div>Room Key: <span className="text-indigo-400">{roomKey}</span></div>
+              <div className="text-rose-400 text-[10px]">
+                ⚠️ This action is irreversible. All code, version snapshots, and active connections will be terminated.
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                disabled={isDeletingRoom}
+                onClick={() => setShowDeleteModal(false)}
+                className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingRoom}
+                onClick={handleDeleteRoom}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold shadow-lg shadow-rose-600/30 transition-all cursor-pointer disabled:opacity-50"
+              >
+                {isDeletingRoom ? (
+                  <>
+                    <span className="material-symbols-outlined text-[16px] animate-spin">progress_activity</span>
+                    <span>Deleting...</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="material-symbols-outlined text-[16px]">delete_forever</span>
+                    <span>Delete Room</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

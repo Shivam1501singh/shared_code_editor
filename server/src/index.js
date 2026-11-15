@@ -188,6 +188,12 @@ io.on('connection', (socket) => {
     socket.to(roomKey).emit('room:language-update', { language });
   });
 
+  // Room Deletion Sync (Host deletes workspace)
+  socket.on('room:delete', ({ roomKey }) => {
+    rooms.delete(roomKey);
+    socket.to(roomKey).emit('room:deleted', { message: 'This workspace was deleted by the host.' });
+  });
+
   // WebRTC Signaling Events
   socket.on('voice:join', ({ roomKey }) => {
     socket.to(roomKey).emit('voice:peer-joined', { socketId: socket.id });
