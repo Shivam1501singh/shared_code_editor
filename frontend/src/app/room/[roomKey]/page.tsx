@@ -55,6 +55,13 @@ export default function CollaborativeRoomPage() {
   const [isExecuting, setIsExecuting] = useState(false);
   const [execTime, setExecTime] = useState<string>('0ms');
   const [isOutputCollapsed, setIsOutputCollapsed] = useState(false);
+  const [consoleHeight, setConsoleHeight] = useState(190);
+  const isDraggingRef = useRef(false);
+
+  // In-place Room Title Editing
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [tempTitle, setTempTitle] = useState('');
+  const titleInputRef = useRef<HTMLInputElement | null>(null);
 
   // Gemini AI Review state
   const [isAiDrawerOpen, setIsAiDrawerOpen] = useState(false);
@@ -394,6 +401,12 @@ export default function CollaborativeRoomPage() {
       setActiveSpeakerSocketId(isSpeaking ? socketId : null);
     });
 
+    socket.on('room:title-update', ({ title }: { title: string }) => {
+      if (title && typeof title === 'string') {
+        setRoomTitle(title);
+      }
+    });
+
     socket.on('disconnect', () => {
       setSocketConnected(false);
     });
@@ -632,6 +645,87 @@ export default function CollaborativeRoomPage() {
     }
   };
 
+  const handleStartEditTitle = () => {
+    setTempTitle(roomTitle);
+    setIsEditingTitle(true);
+    setTimeout(() => {
+      titleInputRef.current?.focus();
+      titleInputRef.current?.select();
+    }, 50);
+  };
+
+  const saveTitle = async () => {
+    setIsEditingTitle(false);
+    const trimmed = tempTitle.trim();
+    if (!trimmed || trimmed === roomTitle) return;
+
+    setRoomTitle(trimmed);
+
+    // Broadcast title update to peers
+    if (socketRef.current && socketRef.current.connected) {
+      socketRef.current.emit('room:title-update', { roomKey, title: trimmed });
+    }
+
+    // Persist to Neon PostgreSQL
+    try {
+      await fetch(`/api/rooms/${roomKey}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: trimmed }),
+      });
+    } catch (err) {
+      console.error('Failed to update room title:', err);
+    }
+  };
+
+  const handleTitleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      saveTitle();
+    } else if (e.key === 'Escape') {
+      setIsEditingTitle(false);
+    }
+  };
+
+  const startResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    isDraggingRef.current = true;
+    document.body.style.cursor = 'ns-resize';
+    document.body.style.userSelect = 'none';
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      if (!isDraggingRef.current) return;
+      const newHeight = window.innerHeight - moveEvent.clientY;
+      const clamped = Math.max(90, Math.min(newHeight, window.innerHeight * 0.75));
+      setConsoleHeight(clamped);
+      if (editorRef.current) {
+        editorRef.current.layout();
+      }
+    };
+
+    const onMouseUp = () => {
+      isDraggingRef.current = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+      if (editorRef.current) {
+        editorRef.current.layout();
+      }
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  };
+
+  const toggleOutputCollapse = () => {
+    setIsOutputCollapsed((prev) => !prev);
+    setTimeout(() => {
+      if (editorRef.current) {
+        editorRef.current.layout();
+      }
+    }, 50);
+  };
+
   return (
     <div className="bg-[#0a0e17] text-slate-100 font-sans antialiased overflow-hidden select-none h-screen flex flex-col">
       {/* 1. Header Bar */}
@@ -647,12 +741,46 @@ export default function CollaborativeRoomPage() {
 
           <div className="w-px h-4 bg-slate-800 hidden sm:block" />
 
-          {/* Editable Title */}
-          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-900/60 border border-slate-800/60 text-slate-200">
-            <span className="text-xs md:text-sm font-medium tracking-tight truncate max-w-[150px] md:max-w-none">
-              {roomTitle}
-            </span>
-          </div>
+          {/* In-Place Editable Workspace Title */}
+          {isEditingTitle ? (
+            <div className="flex items-center gap-1.5">
+              <input
+                ref={titleInputRef}
+                type="text"
+                value={tempTitle}
+                onChange={(e) => setTempTitle(e.target.value)}
+                onBlur={saveTitle}
+                onKeyDown={handleTitleKeyDown}
+                maxLength={60}
+                className="bg-slate-900 border border-indigo-500 rounded px-2.5 py-1 text-xs md:text-sm font-medium text-white focus:outline-none focus:ring-1 focus:ring-indigo-400 w-36 md:w-56 shadow-[0_0_10px_rgba(99,102,241,0.2)]"
+              />
+              <button
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  saveTitle();
+                }}
+                className="p-1 rounded hover:bg-slate-800 text-emerald-400 hover:text-emerald-300 transition-colors"
+                title="Save workspace name"
+              >
+                <span className="material-symbols-outlined text-[16px]">check</span>
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={handleStartEditTitle}
+              className="group flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-900/60 hover:bg-slate-800/80 border border-slate-800/60 hover:border-slate-700 text-slate-200 hover:text-white transition-all cursor-pointer text-left"
+              title="Click to rename workspace"
+            >
+              <span className="text-xs md:text-sm font-medium tracking-tight truncate max-w-[140px] md:max-w-[220px]">
+                {roomTitle}
+              </span>
+              <span className="material-symbols-outlined text-[13px] text-slate-500 group-hover:text-indigo-400 opacity-60 group-hover:opacity-100 transition-all">
+                edit
+              </span>
+            </button>
+          )}
 
           {/* Room Key Badge with Copy Action */}
           <div className="relative flex items-center bg-slate-900/80 border border-slate-800/80 rounded-full px-2.5 py-0.5 text-xs">
@@ -1035,15 +1163,29 @@ export default function CollaborativeRoomPage() {
         )}
       </main>
 
-      {/* 3. Output Terminal Panel */}
+      {/* 3. Output Terminal Panel (Draggable Height & Collapsible) */}
       <footer
-        className="w-full bg-[#080c14] border-t border-slate-800/80 flex flex-col z-30 transition-all duration-200 shrink-0"
+        className="w-full bg-[#080c14] border-t border-slate-800/80 flex flex-col z-30 shrink-0 relative"
         id="output-panel"
+        style={{
+          height: isOutputCollapsed ? '36px' : `${consoleHeight}px`,
+        }}
       >
+        {/* Draggable Resize Handle */}
+        {!isOutputCollapsed && (
+          <div
+            onMouseDown={startResize}
+            className="absolute -top-1.5 left-0 right-0 h-3 cursor-ns-resize flex items-center justify-center group z-40"
+            title="Drag to resize console output"
+          >
+            <div className="w-14 h-1 rounded-full bg-slate-700/80 group-hover:bg-indigo-400 active:bg-indigo-300 transition-colors shadow-sm" />
+          </div>
+        )}
+
         <div className="h-9 px-4 bg-[#090d16] flex items-center justify-between text-xs font-mono select-none border-b border-slate-800/50">
           <div
             className="flex items-center gap-2 cursor-pointer"
-            onClick={() => setIsOutputCollapsed((prev) => !prev)}
+            onClick={toggleOutputCollapse}
           >
             <span className="text-slate-400 font-mono text-[13px] font-semibold">&gt;_</span>
             <span className="font-sans font-medium text-slate-200 text-xs">Console Output</span>
@@ -1088,7 +1230,7 @@ export default function CollaborativeRoomPage() {
               </button>
               <button
                 className="w-6 h-6 rounded hover:bg-slate-800 flex items-center justify-center text-slate-400 hover:text-slate-200 transition-colors"
-                onClick={() => setIsOutputCollapsed((prev) => !prev)}
+                onClick={toggleOutputCollapse}
                 title="Collapse / Expand"
               >
                 <span className="material-symbols-outlined text-[16px]">
@@ -1101,7 +1243,7 @@ export default function CollaborativeRoomPage() {
 
         {/* Console Body with User Select and Text Cursor Enabled */}
         {!isOutputCollapsed && (
-          <div className="p-4 font-mono text-xs leading-relaxed space-y-1 bg-[#080c14] overflow-y-auto max-h-48 min-h-[6rem] select-text cursor-text">
+          <div className="flex-1 p-4 font-mono text-xs leading-relaxed space-y-1 bg-[#080c14] overflow-y-auto min-h-0 select-text cursor-text">
             {outputLogs.map((log, index) => (
               <div
                 key={index}

@@ -95,6 +95,11 @@ io.on('connection', (socket) => {
     });
   });
 
+  // Room Title Renaming Sync
+  socket.on('room:title-update', ({ roomKey, title }) => {
+    socket.to(roomKey).emit('room:title-update', { title });
+  });
+
   // WebRTC Signaling Events
   socket.on('voice:join', ({ roomKey }) => {
     socket.to(roomKey).emit('voice:peer-joined', { socketId: socket.id });
