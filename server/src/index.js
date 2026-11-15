@@ -35,18 +35,23 @@ io.on('connection', (socket) => {
   console.log(`[Socket connected] ${socket.id}`);
 
   // Room Join
-  socket.on('room:join', ({ roomKey, user }) => {
+  socket.on('room:join', ({ roomKey, user, title }) => {
     socket.join(roomKey);
 
     if (!rooms.has(roomKey)) {
       rooms.set(roomKey, {
         codeContent: "// Start coding collaboratively here...\nconsole.log('Hello, SynCode World!');",
         language: 'javascript',
+        title: title || '',
         users: new Map(),
       });
     }
 
     const room = rooms.get(roomKey);
+    if (title && !room.title) {
+      room.title = title;
+    }
+
     const userPayload = {
       id: user?.id || socket.id,
       name: user?.name || 'Guest Developer',
@@ -57,11 +62,12 @@ io.on('connection', (socket) => {
 
     room.users.set(socket.id, userPayload);
 
-    // Send initial room state to joining peer
+    // Send initial room state to joining peer with synchronized room title
     socket.emit('room:init', {
       roomKey,
       codeContent: room.codeContent,
       language: room.language,
+      title: room.title || '',
       activeUsers: Array.from(room.users.values()),
     });
 
@@ -127,6 +133,10 @@ io.on('connection', (socket) => {
 
   // Room Title Renaming Sync
   socket.on('room:title-update', ({ roomKey, title }) => {
+    const room = rooms.get(roomKey);
+    if (room && title) {
+      room.title = title;
+    }
     socket.to(roomKey).emit('room:title-update', { title });
   });
 

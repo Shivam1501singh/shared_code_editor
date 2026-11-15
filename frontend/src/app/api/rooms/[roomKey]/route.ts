@@ -78,6 +78,16 @@ export async function PATCH(
       return NextResponse.json({ success: false, error: 'Room not found' }, { status: 404 });
     }
 
+    // Only the room creator (host) can update the room title
+    if (body.title && body.title.trim() !== room.title) {
+      if (!session?.user?.id || session.user.id !== room.hostId) {
+        return NextResponse.json(
+          { success: false, error: 'Only the room host can rename this workspace' },
+          { status: 403 }
+        );
+      }
+    }
+
     const updatedRoom = await prisma.room.update({
       where: { roomKey },
       data: {

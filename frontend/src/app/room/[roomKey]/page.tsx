@@ -38,10 +38,19 @@ export default function CollaborativeRoomPage() {
   const { data: session } = useSession();
 
   const [code, setCode] = useState<string>('// Loading collaborative editor...');
+  const codeRef = useRef<string>('// Loading collaborative editor...');
+  const isTypingRef = useRef<boolean>(false);
   const [roomTitle, setRoomTitle] = useState<string>('Untitled Room');
   const [roomHost, setRoomHost] = useState<{ id: string; name: string } | null>(null);
   const [activeUsers, setActiveUsers] = useState<Participant[]>([]);
   const [socketConnected, setSocketConnected] = useState(false);
+
+  // Host verification: only the room creator has permission to rename
+  const isHost = Boolean(
+    session?.user?.id &&
+    roomHost?.id &&
+    session.user.id === roomHost.id
+  );
 
   // WebRTC Voice State
   const [isVoiceActive, setIsVoiceActive] = useState(false);
@@ -142,15 +151,16 @@ export default function CollaborativeRoomPage() {
   }, [session, roomKey]);
 
   // Cloud Persistence / Save handler
-  const saveCodeToDb = useCallback(async (codeToSave: string, createSnapshot = false) => {
+  const saveCodeToDb = useCallback(async (codeToSave?: string, createSnapshot = false) => {
     if (!roomKey) return;
+    const content = codeToSave !== undefined ? codeToSave : (editorRef.current ? editorRef.current.getValue() : codeRef.current);
     try {
       setSaveStatus('saving');
       const res = await fetch(`/api/rooms/${roomKey}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          codeContent: codeToSave,
+          codeContent: content,
           createSnapshot,
           note: createSnapshot ? `Checkpoint (${new Date().toLocaleTimeString()})` : undefined,
         }),
@@ -176,11 +186,20 @@ export default function CollaborativeRoomPage() {
         if (res.ok) {
           const json = await res.json();
           if (json.success && json.data) {
-            setRoomTitle(json.data.title);
+            const fetchedTitle = json.data.title || 'Untitled Room';
+            setRoomTitle(fetchedTitle);
             if (json.data.host) {
               setRoomHost(json.data.host);
             }
-            setCode(json.data.codeContent || '// Start coding here...\n');
+            const initialText = json.data.codeContent || '// Start coding here...\n';
+            codeRef.current = initialText;
+            setCode(initialText);
+            if (editorRef.current) {
+              const model = editorRef.current.getModel();
+              if (model && !model.getValue()) {
+                model.setValue(initialText);
+              }
+            }
             setSaveStatus('saved');
           }
         }
@@ -227,13 +246,26 @@ export default function CollaborativeRoomPage() {
 
     socket.on('connect', () => {
       setSocketConnected(true);
-      socket.emit('room:join', { roomKey, user: currentUserRef.current });
+      socket.emit('room:join', {
+        roomKey,
+        user: currentUserRef.current,
+        title: roomTitle,
+      });
     });
 
     socket.on('room:init', (data) => {
+      if (data.title) {
+        setRoomTitle(data.title);
+      }
       if (data.codeContent) {
-        isRemoteUpdateRef.current = true;
-        setCode(data.codeContent);
+        codeRef.current = data.codeContent;
+        if (editorRef.current) {
+          const model = editorRef.current.getModel();
+          if (model && model.getValue() !== data.codeContent) {
+            isRemoteUpdateRef.current = true;
+            model.setValue(data.codeContent);
+          }
+        }
       }
       if (data.activeUsers) {
         setActiveUsers(data.activeUsers);
@@ -436,6 +468,7 @@ export default function CollaborativeRoomPage() {
 
     socket.on('code:broadcast', ({ codeContent, cursorPosition, user, senderSocketId }) => {
       isRemoteUpdateRef.current = true;
+      codeRef.current = codeContent;
       if (editorRef.current) {
         const model = editorRef.current.getModel();
         if (model && model.getValue() !== codeContent) {
@@ -448,7 +481,6 @@ export default function CollaborativeRoomPage() {
           ]);
         }
       }
-      setCode(codeContent);
       setSaveStatus('saved');
 
       // Instantly position peer's cursor at the character they just typed!
@@ -506,7 +538,8 @@ export default function CollaborativeRoomPage() {
       isRemoteUpdateRef.current = false;
       return;
     }
-    setCode(updatedCode);
+    isTypingRef.current = true;
+    codeRef.current = updatedCode;
     setSaveStatus('unsaved');
 
     // Debounce cloud database auto-save (2.5s)
@@ -517,29 +550,34 @@ export default function CollaborativeRoomPage() {
       saveCodeToDb(updatedCode, false);
     }, 2500);
 
-    // Broadcast code update immediately with the accurate cursor position after character insertion
-    queueMicrotask(() => {
-      if (socketRef.current && socketRef.current.connected) {
-        const pos = editorRef.current ? editorRef.current.getPosition() : null;
-        socketRef.current.emit('code:update', {
-          roomKey,
-          codeContent: updatedCode,
-          cursorPosition: pos
-            ? {
-                lineNumber: pos.lineNumber,
-                column: pos.column,
-              }
-            : null,
-          user: currentUserRef.current,
-        });
-      }
-    });
+    // Read live editor cursor position immediately
+    const pos = editorRef.current ? editorRef.current.getPosition() : null;
+
+    if (socketRef.current && socketRef.current.connected) {
+      socketRef.current.emit('code:update', {
+        roomKey,
+        codeContent: updatedCode,
+        cursorPosition: pos
+          ? {
+              lineNumber: pos.lineNumber,
+              column: pos.column,
+            }
+          : null,
+        user: currentUserRef.current,
+      });
+    }
+
+    // Reset typing flag
+    setTimeout(() => {
+      isTypingRef.current = false;
+    }, 50);
   };
 
   // Download code as .js file export
   const downloadCode = () => {
     try {
-      const blob = new Blob([code], { type: 'text/javascript;charset=utf-8' });
+      const currentCode = editorRef.current ? editorRef.current.getValue() : codeRef.current;
+      const blob = new Blob([currentCode], { type: 'text/javascript;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       const safeTitle = (roomTitle || 'syncode_solution')
@@ -604,7 +642,8 @@ export default function CollaborativeRoomPage() {
         });
       };
 
-      const runner = new Function(code);
+      const currentCode = editorRef.current ? editorRef.current.getValue() : codeRef.current;
+      const runner = new Function(currentCode);
       runner();
 
       const duration = (performance.now() - startTime).toFixed(1);
@@ -642,10 +681,11 @@ export default function CollaborativeRoomPage() {
       setAiError(null);
       setIsAiDrawerOpen(true);
 
+      const currentCode = editorRef.current ? editorRef.current.getValue() : codeRef.current;
       const res = await fetch('/api/ai/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code, language: 'javascript' }),
+        body: JSON.stringify({ code: currentCode, language: 'javascript' }),
       });
 
       const json = await res.json();
@@ -709,6 +749,7 @@ export default function CollaborativeRoomPage() {
   };
 
   const handleStartEditTitle = () => {
+    if (!isHost) return;
     setTempTitle(roomTitle);
     setIsEditingTitle(true);
     setTimeout(() => {
@@ -718,6 +759,10 @@ export default function CollaborativeRoomPage() {
   };
 
   const saveTitle = async () => {
+    if (!isHost) {
+      setIsEditingTitle(false);
+      return;
+    }
     setIsEditingTitle(false);
     const trimmed = tempTitle.trim();
     if (!trimmed || trimmed === roomTitle) return;
@@ -804,45 +849,56 @@ export default function CollaborativeRoomPage() {
 
           <div className="w-px h-4 bg-slate-800 hidden sm:block" />
 
-          {/* In-Place Editable Workspace Title */}
-          {isEditingTitle ? (
-            <div className="flex items-center gap-1.5">
-              <input
-                ref={titleInputRef}
-                type="text"
-                value={tempTitle}
-                onChange={(e) => setTempTitle(e.target.value)}
-                onBlur={saveTitle}
-                onKeyDown={handleTitleKeyDown}
-                maxLength={60}
-                className="bg-slate-900 border border-indigo-500 rounded px-2.5 py-1 text-xs md:text-sm font-medium text-white focus:outline-none focus:ring-1 focus:ring-indigo-400 w-36 md:w-56 shadow-[0_0_10px_rgba(99,102,241,0.2)]"
-              />
+          {/* Workspace Title: Host gets in-place rename, Collaborator gets read-only badge */}
+          {isHost ? (
+            isEditingTitle ? (
+              <div className="flex items-center gap-1.5">
+                <input
+                  ref={titleInputRef}
+                  type="text"
+                  value={tempTitle}
+                  onChange={(e) => setTempTitle(e.target.value)}
+                  onBlur={saveTitle}
+                  onKeyDown={handleTitleKeyDown}
+                  maxLength={60}
+                  className="bg-slate-900 border border-indigo-500 rounded px-2.5 py-1 text-xs md:text-sm font-medium text-white focus:outline-none focus:ring-1 focus:ring-indigo-400 w-36 md:w-56 shadow-[0_0_10px_rgba(99,102,241,0.2)]"
+                />
+                <button
+                  type="button"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    saveTitle();
+                  }}
+                  className="p-1 rounded hover:bg-slate-800 text-emerald-400 hover:text-emerald-300 transition-colors"
+                  title="Save workspace name"
+                >
+                  <span className="material-symbols-outlined text-[16px]">check</span>
+                </button>
+              </div>
+            ) : (
               <button
                 type="button"
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  saveTitle();
-                }}
-                className="p-1 rounded hover:bg-slate-800 text-emerald-400 hover:text-emerald-300 transition-colors"
-                title="Save workspace name"
+                onClick={handleStartEditTitle}
+                className="group flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-900/60 hover:bg-slate-800/80 border border-slate-800/60 hover:border-slate-700 text-slate-200 hover:text-white transition-all cursor-pointer text-left"
+                title="Click to rename workspace (Host)"
               >
-                <span className="material-symbols-outlined text-[16px]">check</span>
+                <span className="text-xs md:text-sm font-medium tracking-tight truncate max-w-[140px] md:max-w-[220px]">
+                  {roomTitle}
+                </span>
+                <span className="material-symbols-outlined text-[13px] text-slate-500 group-hover:text-indigo-400 opacity-60 group-hover:opacity-100 transition-all">
+                  edit
+                </span>
               </button>
-            </div>
+            )
           ) : (
-            <button
-              type="button"
-              onClick={handleStartEditTitle}
-              className="group flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-900/60 hover:bg-slate-800/80 border border-slate-800/60 hover:border-slate-700 text-slate-200 hover:text-white transition-all cursor-pointer text-left"
-              title="Click to rename workspace"
+            <div
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-900/60 border border-slate-800/60 text-slate-200 select-none"
+              title={`Workspace: ${roomTitle} (Created by ${roomHost?.name || 'Host'})`}
             >
-              <span className="text-xs md:text-sm font-medium tracking-tight truncate max-w-[140px] md:max-w-[220px]">
+              <span className="text-xs md:text-sm font-medium tracking-tight truncate max-w-[150px] md:max-w-[240px]">
                 {roomTitle}
               </span>
-              <span className="material-symbols-outlined text-[13px] text-slate-500 group-hover:text-indigo-400 opacity-60 group-hover:opacity-100 transition-all">
-                edit
-              </span>
-            </button>
+            </div>
           )}
 
           {/* Room Key Badge with Copy Action */}
@@ -1032,11 +1088,18 @@ export default function CollaborativeRoomPage() {
             defaultLanguage="javascript"
             language="javascript"
             theme="vs-dark"
-            value={code}
+            defaultValue={codeRef.current}
             onChange={handleEditorChange}
             onMount={(editor, monaco) => {
               editorRef.current = editor;
               monacoRef.current = monaco;
+
+              if (codeRef.current) {
+                const model = editor.getModel();
+                if (model && model.getValue() !== codeRef.current) {
+                  model.setValue(codeRef.current);
+                }
+              }
 
               const emitCursorUpdate = (position: any, selection: any) => {
                 if (socketRef.current && socketRef.current.connected) {
@@ -1067,14 +1130,18 @@ export default function CollaborativeRoomPage() {
                 emitCursorUpdate(startPos, editor.getSelection());
               }
 
-              // Synchronous immediate cursor position sync on clicks, typing, and arrow navigation
+              // Synchronous cursor sync strictly on mouse clicks & arrow keys (when NOT typing)
               editor.onDidChangeCursorPosition((e: any) => {
-                emitCursorUpdate(e.position, editor.getSelection());
+                if (!isTypingRef.current) {
+                  emitCursorUpdate(e.position, editor.getSelection());
+                }
               });
 
-              // Synchronous immediate selection sync on text selection
+              // Synchronous text selection sync
               editor.onDidChangeCursorSelection((e: any) => {
-                emitCursorUpdate(editor.getPosition(), e.selection);
+                if (!isTypingRef.current) {
+                  emitCursorUpdate(editor.getPosition(), e.selection);
+                }
               });
             }}
             options={{
