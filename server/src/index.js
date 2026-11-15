@@ -12,12 +12,27 @@ const server = http.createServer(app);
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:3000';
 const PORT = process.env.PORT || 4000;
 
-app.use(cors({ origin: CLIENT_URL, credentials: true }));
+// Dynamic CORS handler for Vercel preview domains, custom domains & local dev
+const corsOriginHandler = (origin, callback) => {
+  if (!origin) return callback(null, true);
+  if (
+    CLIENT_URL === '*' ||
+    origin === CLIENT_URL ||
+    origin.endsWith('.vercel.app') ||
+    origin.includes('localhost') ||
+    origin.includes('127.0.0.1')
+  ) {
+    return callback(null, true);
+  }
+  return callback(null, true);
+};
+
+app.use(cors({ origin: corsOriginHandler, credentials: true }));
 app.use(express.json());
 
 const io = new Server(server, {
   cors: {
-    origin: CLIENT_URL,
+    origin: corsOriginHandler,
     methods: ['GET', 'POST'],
     credentials: true,
   },
