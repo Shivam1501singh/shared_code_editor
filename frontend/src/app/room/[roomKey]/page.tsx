@@ -115,6 +115,7 @@ export default function CollaborativeRoomPage() {
   // WebRTC Voice State
   const [isVoiceActive, setIsVoiceActive] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
+  const [peerMuteStatus, setPeerMuteStatus] = useState<Record<string, boolean>>({});
   const [isLocalSpeaking, setIsLocalSpeaking] = useState(false);
   const [activeSpeakerSocketId, setActiveSpeakerSocketId] = useState<string | null>(null);
 
@@ -363,6 +364,11 @@ export default function CollaborativeRoomPage() {
 
     socket.on('user:left', ({ socketId }) => {
       setActiveUsers((prev) => prev.filter((u) => u.socketId !== socketId));
+      setPeerMuteStatus((prev) => {
+        const next = { ...prev };
+        delete next[socketId];
+        return next;
+      });
 
       // 1. Remove remote cursor widget
       if (editorRef.current && remoteWidgetsRef.current.has(socketId)) {
@@ -561,6 +567,10 @@ export default function CollaborativeRoomPage() {
 
     socket.on('voice:speaking', ({ socketId, isSpeaking }) => {
       setActiveSpeakerSocketId(isSpeaking ? socketId : null);
+    });
+
+    socket.on('voice:mute-status', ({ socketId, isMuted }: { socketId: string; isMuted: boolean }) => {
+      setPeerMuteStatus((prev) => ({ ...prev, [socketId]: isMuted }));
     });
 
     socket.on('room:title-update', ({ title }: { title: string }) => {
@@ -1139,9 +1149,17 @@ export default function CollaborativeRoomPage() {
                         ? 'bg-emerald-950 text-emerald-300 ring-2 ring-emerald-400/50 shadow-[0_0_8px_#10b981]'
                         : 'bg-slate-800 text-slate-200'
                     }`}
-                    title={`${user.name} ${isHostUser ? '(Host / Creator 👑)' : '(Collaborator)'}`}
+                    title={`${user.name} ${isHostUser ? '(Host / Creator 👑)' : '(Collaborator)'}${peerMuteStatus[user.socketId] ? ' [Muted]' : ''}`}
                   >
                     {user.name.substring(0, 2).toUpperCase()}
+                    {peerMuteStatus[user.socketId] && (
+                      <span
+                        className="absolute -bottom-1 -right-1 w-2.5 h-2.5 bg-rose-600 border border-slate-900 rounded-full flex items-center justify-center text-[6px] text-white font-bold"
+                        title={`${user.name} is muted`}
+                      >
+                        ✕
+                      </span>
+                    )}
                   </div>
                 );
               })}
@@ -1159,22 +1177,23 @@ export default function CollaborativeRoomPage() {
             {/* Mic Toggle Button */}
             <button
               onClick={toggleVoiceChannel}
-              className={`w-5 h-5 rounded-full flex items-center justify-center transition-all ${
+              type="button"
+              className={`w-6 h-6 rounded-full flex items-center justify-center transition-all cursor-pointer shadow-sm active:scale-90 ${
                 !isVoiceActive
-                  ? 'bg-slate-800 hover:bg-slate-700 text-slate-400'
+                  ? 'bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200'
                   : isMuted
-                  ? 'bg-rose-950 text-rose-400 hover:bg-rose-900'
-                  : 'bg-emerald-950 text-emerald-400 hover:bg-emerald-900'
+                  ? 'bg-rose-950/90 text-rose-400 border border-rose-600/50 hover:bg-rose-900 shadow-[0_0_8px_rgba(244,63,94,0.3)]'
+                  : 'bg-emerald-950/90 text-emerald-400 border border-emerald-500/50 hover:bg-emerald-900 shadow-[0_0_8px_rgba(16,185,129,0.3)]'
               }`}
               title={
                 !isVoiceActive
-                  ? 'Click to enable WebRTC Voice Call'
+                  ? 'Click to start WebRTC Voice'
                   : isMuted
                   ? 'Microphone muted (Click to unmute)'
                   : 'Microphone active (Click to mute)'
               }
             >
-              <span className="material-symbols-outlined text-[13px]">
+              <span className="material-symbols-outlined text-[14px]">
                 {!isVoiceActive ? 'mic_none' : isMuted ? 'mic_off' : 'mic'}
               </span>
             </button>

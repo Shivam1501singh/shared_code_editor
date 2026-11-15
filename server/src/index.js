@@ -198,6 +198,13 @@ io.on('connection', (socket) => {
     });
   });
 
+  socket.on('voice:mute-status', ({ roomKey, isMuted }) => {
+    socket.to(roomKey).emit('voice:mute-status', {
+      socketId: socket.id,
+      isMuted,
+    });
+  });
+
   // Disconnection cleanup
   socket.on('disconnecting', () => {
     for (const roomKey of socket.rooms) {
