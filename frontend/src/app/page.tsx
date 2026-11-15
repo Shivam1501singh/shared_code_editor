@@ -17,8 +17,12 @@ export default function LandingPage() {
       const params = new URLSearchParams(window.location.search);
       const err = params.get('error');
       if (err) {
+        // Immediately clean up the URL bar so the error parameter is not visible
+        // and refreshing the page does not get stuck with the error!
+        window.history.replaceState({}, '', window.location.pathname);
+
         const lastAttempt = sessionStorage.getItem('syncode_last_provider');
-        if (err === 'OAuthAccountNotLinked') {
+        if (err === 'OAuthAccountNotLinked' || err === 'Callback' || err === 'OAuthCallback') {
           if (lastAttempt === 'github') {
             setAuthError('An account with this email was registered using Google. Please continue with Google to access your workspace.');
           } else if (lastAttempt === 'google') {
@@ -26,13 +30,17 @@ export default function LandingPage() {
           } else {
             setAuthError('An account with this email was registered using Google. Please continue with Google to access your workspace.');
           }
-        } else if (err === 'OAuthCallback' || err === 'Callback') {
-          setAuthError('OAuth authorization callback failed. Please check your OAuth provider settings.');
         } else if (err === 'AccessDenied') {
           setAuthError('Sign-in authorization was cancelled.');
         } else {
-          setAuthError(`Authentication note: ${err}`);
+          setAuthError('An account with this email was registered using Google. Please continue with Google to access your workspace.');
         }
+
+        // Auto-dismiss alert after 8 seconds
+        const timer = setTimeout(() => {
+          setAuthError(null);
+        }, 8000);
+        return () => clearTimeout(timer);
       }
     }
   }, []);
