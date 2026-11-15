@@ -62,12 +62,60 @@ export default function CollaborativeRoomPage() {
   const [aiData, setAiData] = useState<AIAnalysis | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
 
+  // Auto-Save & Cloud Persistence State
+  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'unsaved' | 'error'>('saved');
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+  const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
+
   const [copyToast, setCopyToast] = useState(false);
+  const [exportToast, setExportToast] = useState(false);
 
   const socketRef = useRef<Socket | null>(null);
   const voiceManagerRef = useRef<WebRTCVoiceManager | null>(null);
   const editorRef = useRef<any>(null);
+  const monacoRef = useRef<any>(null);
   const isRemoteUpdateRef = useRef<boolean>(false);
+  const remoteCursorDecorationsRef = useRef<Map<string, string[]>>(new Map());
+  const cursorThrottleRef = useRef<number>(0);
+
+  // Vibrant collaborator cursor palette
+  const userColorRef = useRef<string>('#38bdf8');
+  useEffect(() => {
+    const palette = ['#38bdf8', '#818cf8', '#34d399', '#fbbf24', '#f472b6', '#a78bfa', '#fb923c', '#2dd4bf'];
+    const id = session?.user?.id || Math.random().toString();
+    let hash = 0;
+    for (let i = 0; i < id.length; i++) {
+      hash = (hash << 5) - hash + id.charCodeAt(i);
+      hash |= 0;
+    }
+    userColorRef.current = palette[Math.abs(hash) % palette.length];
+  }, [session]);
+
+  // Cloud Persistence / Save handler
+  const saveCodeToDb = useCallback(async (codeToSave: string, createSnapshot = false) => {
+    if (!roomKey) return;
+    try {
+      setSaveStatus('saving');
+      const res = await fetch(`/api/rooms/${roomKey}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          codeContent: codeToSave,
+          createSnapshot,
+          note: createSnapshot ? `Checkpoint (${new Date().toLocaleTimeString()})` : undefined,
+        }),
+      });
+      if (res.ok) {
+        setSaveStatus('saved');
+        setLastSavedAt(new Date());
+      } else {
+        setSaveStatus('error');
+      }
+    } catch (err) {
+      console.error('Auto-save failed:', err);
+      setSaveStatus('error');
+    }
+  }, [roomKey]);
 
   // Load initial room data from database
   useEffect(() => {
@@ -80,6 +128,7 @@ export default function CollaborativeRoomPage() {
           if (json.success && json.data) {
             setRoomTitle(json.data.title);
             setCode(json.data.codeContent || '// Start coding here...\n');
+            setSaveStatus('saved');
           }
         }
       } catch (err) {
@@ -89,7 +138,19 @@ export default function CollaborativeRoomPage() {
     fetchRoom();
   }, [roomKey]);
 
-  // Socket.io initialization & WebRTC Voice
+  // Unsaved changes browser guard
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (saveStatus === 'unsaved' || saveStatus === 'saving') {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [saveStatus]);
+
+  // Socket.io initialization, WebRTC Voice & Remote Cursor Tracking
   useEffect(() => {
     if (!roomKey) return;
 
@@ -117,7 +178,7 @@ export default function CollaborativeRoomPage() {
         id: session?.user?.id || `guest-${Math.random().toString(36).substring(2, 6)}`,
         name: session?.user?.name || 'Guest Developer',
         image: session?.user?.image || null,
-        color: '#22d3ee',
+        color: userColorRef.current,
       };
       socket.emit('room:join', { roomKey, user: userPayload });
     });
@@ -141,11 +202,107 @@ export default function CollaborativeRoomPage() {
 
     socket.on('user:left', ({ socketId }) => {
       setActiveUsers((prev) => prev.filter((u) => u.socketId !== socketId));
+      // Cleanup remote cursor decoration and style tag
+      if (editorRef.current && remoteCursorDecorationsRef.current.has(socketId)) {
+        const oldDecorations = remoteCursorDecorationsRef.current.get(socketId) || [];
+        editorRef.current.deltaDecorations(oldDecorations, []);
+        remoteCursorDecorationsRef.current.delete(socketId);
+      }
+      const cleanId = String(socketId).replace(/[^a-zA-Z0-9_-]/g, '_');
+      const styleEl = document.getElementById(`cursor-style-${cleanId}`);
+      if (styleEl) styleEl.remove();
     });
 
     socket.on('code:broadcast', ({ codeContent }) => {
       isRemoteUpdateRef.current = true;
       setCode(codeContent);
+      setSaveStatus('saved');
+    });
+
+    // Remote Cursor Tracking Broadcast
+    socket.on('cursor:broadcast', ({ socketId, user, position, selection }) => {
+      if (!editorRef.current || !monacoRef.current) return;
+      if (socketId === socket.id) return;
+
+      const cleanId = String(socketId).replace(/[^a-zA-Z0-9_-]/g, '_');
+      const color = user?.color || '#818cf8';
+      const name = (user?.name || 'Peer').replace(/"/g, '\\"');
+
+      // Inject / update dynamic style tag for peer caret and selection
+      let styleEl = document.getElementById(`cursor-style-${cleanId}`) as HTMLStyleElement;
+      if (!styleEl) {
+        styleEl = document.createElement('style');
+        styleEl.id = `cursor-style-${cleanId}`;
+        document.head.appendChild(styleEl);
+      }
+      styleEl.textContent = `
+        .remote-caret-${cleanId} {
+          border-left: 2px solid ${color} !important;
+          margin-left: -1px;
+          position: relative;
+          z-index: 10;
+        }
+        .remote-caret-${cleanId}::after {
+          content: "${name}";
+          position: absolute;
+          top: -18px;
+          left: -2px;
+          font-size: 10px;
+          line-height: 14px;
+          background-color: ${color};
+          color: #0b0f19;
+          font-family: ui-sans-serif, system-ui, sans-serif;
+          font-weight: 700;
+          padding: 0 4px;
+          border-radius: 3px;
+          white-space: nowrap;
+          pointer-events: none;
+          z-index: 50;
+          box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+          opacity: 0.95;
+        }
+        .remote-selection-${cleanId} {
+          background-color: ${color}33 !important;
+        }
+      `;
+
+      const decorations: any[] = [];
+      if (position?.lineNumber && position?.column) {
+        decorations.push({
+          range: new monacoRef.current.Range(
+            position.lineNumber,
+            position.column,
+            position.lineNumber,
+            position.column
+          ),
+          options: {
+            className: `remote-caret-${cleanId}`,
+            hoverMessage: { value: `**${user?.name || 'Peer'}** is editing here` },
+          },
+        });
+      }
+
+      if (
+        selection &&
+        (selection.startLineNumber !== selection.endLineNumber ||
+          selection.startColumn !== selection.endColumn)
+      ) {
+        decorations.push({
+          range: new monacoRef.current.Range(
+            selection.startLineNumber,
+            selection.startColumn,
+            selection.endLineNumber,
+            selection.endColumn
+          ),
+          options: {
+            className: `remote-selection-${cleanId}`,
+          },
+        });
+      }
+
+      const oldDecorations = remoteCursorDecorationsRef.current.get(socketId) || [];
+      const newIds = editorRef.current.deltaDecorations(oldDecorations, decorations);
+      remoteCursorDecorationsRef.current.set(socketId, newIds);
     });
 
     socket.on('voice:speaking', ({ socketId, isSpeaking }) => {
@@ -157,12 +314,16 @@ export default function CollaborativeRoomPage() {
     });
 
     return () => {
+      if (autoSaveTimerRef.current) {
+        clearTimeout(autoSaveTimerRef.current);
+      }
+      document.querySelectorAll('[id^="cursor-style-"]').forEach((el) => el.remove());
       voiceManager.destroy();
       socket.disconnect();
     };
   }, [roomKey, session]);
 
-  // Handle local code edits and broadcast to peers
+  // Handle local code edits and broadcast to peers with debounced auto-save
   const handleEditorChange = (value: string | undefined) => {
     const updatedCode = value || '';
     if (isRemoteUpdateRef.current) {
@@ -170,8 +331,41 @@ export default function CollaborativeRoomPage() {
       return;
     }
     setCode(updatedCode);
+    setSaveStatus('unsaved');
+
     if (socketRef.current && socketConnected) {
       socketRef.current.emit('code:update', { roomKey, codeContent: updatedCode });
+    }
+
+    // Debounce cloud database auto-save (2.5s)
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current);
+    }
+    autoSaveTimerRef.current = setTimeout(() => {
+      saveCodeToDb(updatedCode, false);
+    }, 2500);
+  };
+
+  // Download code as .js file export
+  const downloadCode = () => {
+    try {
+      const blob = new Blob([code], { type: 'text/javascript;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      const safeTitle = (roomTitle || 'syncode_solution')
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]/g, '_')
+        .replace(/_+/g, '_');
+      link.href = url;
+      link.download = `${safeTitle}.js`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      setExportToast(true);
+      setTimeout(() => setExportToast(false), 2000);
+    } catch (err) {
+      console.error('Failed to export code file:', err);
     }
   };
 
@@ -288,17 +482,20 @@ export default function CollaborativeRoomPage() {
     setIsAiDrawerOpen(false);
   };
 
-  // Keyboard shortcut: Ctrl + Enter / Cmd + Enter
+  // Keyboard shortcuts: Ctrl + Enter (Run) and Ctrl + S (Save snapshot)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
         e.preventDefault();
         executeCode();
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault();
+        saveCodeToDb(code, true);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [executeCode]);
+  }, [executeCode, saveCodeToDb, code]);
 
   const copyRoomLink = () => {
     if (typeof window !== 'undefined' && navigator.clipboard) {
@@ -367,12 +564,13 @@ export default function CollaborativeRoomPage() {
                 return (
                   <div
                     key={user.socketId || idx}
+                    style={{ borderColor: user.color || '#6366f1' }}
                     className={`w-6 h-6 rounded-full flex items-center justify-center font-mono text-[10px] font-semibold border transition-all ${
                       isSpeaking
-                        ? 'border-emerald-400 bg-emerald-950 text-emerald-300 ring-2 ring-emerald-400/50 shadow-[0_0_8px_#10b981]'
-                        : 'border-slate-700 bg-slate-800 text-slate-300'
+                        ? 'bg-emerald-950 text-emerald-300 ring-2 ring-emerald-400/50 shadow-[0_0_8px_#10b981]'
+                        : 'bg-slate-800 text-slate-200'
                     }`}
-                    title={user.name}
+                    title={`${user.name} (Collaborator)`}
                   >
                     {user.name.substring(0, 2).toUpperCase()}
                   </div>
@@ -411,6 +609,24 @@ export default function CollaborativeRoomPage() {
                 {!isVoiceActive ? 'mic_none' : isMuted ? 'mic_off' : 'mic'}
               </span>
             </button>
+          </div>
+
+          {/* Download / Export Code Button */}
+          <div className="relative">
+            <button
+              onClick={downloadCode}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900/90 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white font-medium text-xs transition-all active:scale-95"
+              type="button"
+              title="Download solution.js"
+            >
+              <span className="material-symbols-outlined text-[14px]">download</span>
+              <span className="hidden sm:inline">Export</span>
+            </button>
+            {exportToast && (
+              <span className="absolute -bottom-8 left-1/2 -translate-x-1/2 bg-slate-800 text-slate-200 border border-slate-700 font-sans text-[11px] px-2 py-0.5 rounded shadow-xl whitespace-nowrap z-50">
+                Downloaded to disk!
+              </span>
+            )}
           </div>
 
           {/* AI Review Drawer Button */}
@@ -461,10 +677,40 @@ export default function CollaborativeRoomPage() {
               <span className={`w-1.5 h-1.5 rounded-full ${socketConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
               {socketConnected ? 'Synced' : 'Connecting...'}
             </span>
+            <span className="text-slate-700">•</span>
+
+            {/* Cloud Auto-Save Status Indicator */}
+            {saveStatus === 'saving' && (
+              <span className="flex items-center gap-1 text-slate-400">
+                <span className="material-symbols-outlined text-[13px] animate-spin">sync</span>
+                <span>Saving...</span>
+              </span>
+            )}
+            {saveStatus === 'saved' && (
+              <span
+                className="flex items-center gap-1 text-emerald-400/80"
+                title={lastSavedAt ? `Saved to Neon PostgreSQL at ${lastSavedAt.toLocaleTimeString()}` : 'Saved to Neon DB'}
+              >
+                <span className="material-symbols-outlined text-[13px]">cloud_done</span>
+                <span>Saved</span>
+              </span>
+            )}
+            {saveStatus === 'unsaved' && (
+              <span className="flex items-center gap-1 text-amber-400/90" title="Changes pending auto-save (or press Ctrl + S)">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+                <span>Unsaved</span>
+              </span>
+            )}
+            {saveStatus === 'error' && (
+              <span className="flex items-center gap-1 text-rose-400" title="Auto-save failed to connect">
+                <span className="material-symbols-outlined text-[13px]">cloud_off</span>
+                <span>Save error</span>
+              </span>
+            )}
           </div>
         </div>
 
-        {/* Monaco Editor Container */}
+        {/* Monaco Editor Container with Real-Time Caret Tracking */}
         <div className="flex-1 w-full h-full relative">
           <Editor
             height="100%"
@@ -473,8 +719,71 @@ export default function CollaborativeRoomPage() {
             theme="vs-dark"
             value={code}
             onChange={handleEditorChange}
-            onMount={(editor) => {
+            onMount={(editor, monaco) => {
               editorRef.current = editor;
+              monacoRef.current = monaco;
+
+              // Emit cursor position updates to peer collaborators
+              editor.onDidChangeCursorPosition((e: any) => {
+                const now = Date.now();
+                if (now - cursorThrottleRef.current < 50) return;
+                cursorThrottleRef.current = now;
+
+                if (socketRef.current && socketRef.current.connected) {
+                  const sel = editor.getSelection();
+                  socketRef.current.emit('cursor:update', {
+                    roomKey,
+                    position: {
+                      lineNumber: e.position.lineNumber,
+                      column: e.position.column,
+                    },
+                    selection: sel
+                      ? {
+                          startLineNumber: sel.startLineNumber,
+                          startColumn: sel.startColumn,
+                          endLineNumber: sel.endLineNumber,
+                          endColumn: sel.endColumn,
+                        }
+                      : null,
+                    user: {
+                      id: session?.user?.id || 'guest',
+                      name: session?.user?.name || 'Guest Developer',
+                      color: userColorRef.current,
+                    },
+                  });
+                }
+              });
+
+              // Emit selection changes
+              editor.onDidChangeCursorSelection((e: any) => {
+                const now = Date.now();
+                if (now - cursorThrottleRef.current < 50) return;
+                cursorThrottleRef.current = now;
+
+                if (socketRef.current && socketRef.current.connected) {
+                  const pos = editor.getPosition();
+                  socketRef.current.emit('cursor:update', {
+                    roomKey,
+                    position: pos
+                      ? {
+                          lineNumber: pos.lineNumber,
+                          column: pos.column,
+                        }
+                      : null,
+                    selection: {
+                      startLineNumber: e.selection.startLineNumber,
+                      startColumn: e.selection.startColumn,
+                      endLineNumber: e.selection.endLineNumber,
+                      endColumn: e.selection.endColumn,
+                    },
+                    user: {
+                      id: session?.user?.id || 'guest',
+                      name: session?.user?.name || 'Guest Developer',
+                      color: userColorRef.current,
+                    },
+                  });
+                }
+              });
             }}
             options={{
               fontSize: 13,

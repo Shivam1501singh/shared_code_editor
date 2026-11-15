@@ -67,12 +67,16 @@ export async function PATCH(
 ) {
   try {
     const session = await getServerSession(authOptions);
-    if (!session?.user?.id) {
-      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-    }
-
     const { roomKey } = await params;
     const body = await req.json();
+
+    const room = await prisma.room.findUnique({
+      where: { roomKey },
+    });
+
+    if (!room) {
+      return NextResponse.json({ success: false, error: 'Room not found' }, { status: 404 });
+    }
 
     const updatedRoom = await prisma.room.update({
       where: { roomKey },
@@ -81,6 +85,17 @@ export async function PATCH(
         ...(body.codeContent !== undefined ? { codeContent: body.codeContent } : {}),
       },
     });
+
+    if (body.createSnapshot && body.codeContent) {
+      await prisma.codeSnapshot.create({
+        data: {
+          roomId: room.id,
+          savedById: session?.user?.id || null,
+          codeContent: body.codeContent,
+          note: body.note || 'Version snapshot',
+        },
+      });
+    }
 
     return NextResponse.json({ success: true, data: updatedRoom });
   } catch (error) {

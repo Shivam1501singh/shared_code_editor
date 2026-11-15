@@ -84,11 +84,12 @@ io.on('connection', (socket) => {
   });
 
   // Remote Cursor Tracking
-  socket.on('cursor:update', ({ roomKey, position, user }) => {
+  socket.on('cursor:update', ({ roomKey, position, selection, user }) => {
     socket.to(roomKey).emit('cursor:broadcast', {
       socketId: socket.id,
       user,
       position,
+      selection,
     });
   });
 
