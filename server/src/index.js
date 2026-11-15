@@ -12,19 +12,20 @@ const server = http.createServer(app);
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:3000';
 const PORT = process.env.PORT || 4000;
 
-// Dynamic CORS handler for Vercel preview domains, custom domains & local dev
+// Strict CORS whitelist: only origins explicitly specified in CLIENT_URL env variable
+const allowedOrigins = CLIENT_URL.split(',').map((url) => url.trim().replace(/\/$/, ''));
+
 const corsOriginHandler = (origin, callback) => {
+  // Allow requests with no origin (e.g. server-to-server health checks)
   if (!origin) return callback(null, true);
-  if (
-    CLIENT_URL === '*' ||
-    origin === CLIENT_URL ||
-    origin.endsWith('.vercel.app') ||
-    origin.includes('localhost') ||
-    origin.includes('127.0.0.1')
-  ) {
+
+  const cleanOrigin = origin.replace(/\/$/, '');
+  if (allowedOrigins.includes(cleanOrigin)) {
     return callback(null, true);
   }
-  return callback(null, true);
+
+  console.warn(`[CORS Blocked] Unauthorized origin attempted access: ${origin}`);
+  return callback(new Error(`CORS policy: Origin ${origin} not allowed`), false);
 };
 
 app.use(cors({ origin: corsOriginHandler, credentials: true }));
