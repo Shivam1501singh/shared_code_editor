@@ -538,31 +538,13 @@ export default function DashboardPage() {
                         })}
                       </div>
 
-                      <div className="flex items-center gap-2">
-                        {activeTab === 'created' && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              setRoomToDelete(room);
-                            }}
-                            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 border border-rose-500/20 text-xs font-medium transition-all cursor-pointer"
-                            title={`Delete room "${room.title}"`}
-                          >
-                            <span className="material-symbols-outlined text-[15px]">delete</span>
-                            <span className="hidden sm:inline">Delete</span>
-                          </button>
-                        )}
-
-                        <Link
-                          href={`/room/${room.roomKey}`}
-                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#8083ff] text-[#1000a9] text-xs font-semibold shadow hover:brightness-110 transition-all"
-                        >
-                          <span>Open Editor</span>
-                          <span className="material-symbols-outlined text-[16px]">open_in_new</span>
-                        </Link>
-                      </div>
+                      <Link
+                        href={`/room/${room.roomKey}`}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#8083ff] text-[#1000a9] text-xs font-semibold shadow hover:brightness-110 transition-all"
+                      >
+                        <span>Open Editor</span>
+                        <span className="material-symbols-outlined text-[16px]">open_in_new</span>
+                      </Link>
                     </div>
                   </div>
                 ))}
