@@ -39,6 +39,7 @@ export default function CollaborativeRoomPage() {
 
   const [code, setCode] = useState<string>('// Loading collaborative editor...');
   const [roomTitle, setRoomTitle] = useState<string>('Untitled Room');
+  const [roomHost, setRoomHost] = useState<{ id: string; name: string } | null>(null);
   const [activeUsers, setActiveUsers] = useState<Participant[]>([]);
   const [socketConnected, setSocketConnected] = useState(false);
 
@@ -86,19 +87,59 @@ export default function CollaborativeRoomPage() {
   const remoteCursorDecorationsRef = useRef<Map<string, string[]>>(new Map());
   const remoteWidgetsRef = useRef<Map<string, any>>(new Map());
 
-  // Vibrant collaborator cursor palette (unique per tab instance)
+  // Unique per-tab collaborator seed and reactive profile
+  const tabSeedRef = useRef<string>('');
   const userColorRef = useRef<string>('#38bdf8');
+  const currentUserRef = useRef<{
+    id: string;
+    name: string;
+    image: string | null;
+    color: string;
+  }>({
+    id: 'guest',
+    name: 'Collaborator',
+    image: null,
+    color: '#38bdf8',
+  });
+
   useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!tabSeedRef.current) {
+      let seed = sessionStorage.getItem('syncode_tab_seed');
+      if (!seed) {
+        seed = Math.random().toString(36).substring(2, 7);
+        sessionStorage.setItem('syncode_tab_seed', seed);
+      }
+      tabSeedRef.current = seed;
+    }
+
     const palette = ['#38bdf8', '#818cf8', '#34d399', '#fbbf24', '#f472b6', '#a78bfa', '#fb923c', '#2dd4bf'];
-    const tabSeed = typeof window !== 'undefined' ? (window.name || (window.name = Math.random().toString(36).substring(2, 7))) : '';
-    const id = (session?.user?.id || 'guest') + tabSeed;
+    const rawId = (session?.user?.id || 'guest') + '_' + tabSeedRef.current;
     let hash = 0;
-    for (let i = 0; i < id.length; i++) {
-      hash = (hash << 5) - hash + id.charCodeAt(i);
+    for (let i = 0; i < rawId.length; i++) {
+      hash = (hash << 5) - hash + rawId.charCodeAt(i);
       hash |= 0;
     }
-    userColorRef.current = palette[Math.abs(hash) % palette.length];
-  }, [session]);
+    const color = palette[Math.abs(hash) % palette.length];
+    userColorRef.current = color;
+
+    const resolvedName = session?.user?.name || `Guest (${tabSeedRef.current})`;
+    const updatedUser = {
+      id: session?.user?.id || `guest-${tabSeedRef.current}`,
+      name: resolvedName,
+      image: session?.user?.image || null,
+      color,
+    };
+    currentUserRef.current = updatedUser;
+
+    // Immediately sync resolved user profile to peers if already connected
+    if (socketRef.current && socketRef.current.connected) {
+      socketRef.current.emit('user:profile-update', {
+        roomKey,
+        user: updatedUser,
+      });
+    }
+  }, [session, roomKey]);
 
   // Cloud Persistence / Save handler
   const saveCodeToDb = useCallback(async (codeToSave: string, createSnapshot = false) => {
@@ -136,6 +177,9 @@ export default function CollaborativeRoomPage() {
           const json = await res.json();
           if (json.success && json.data) {
             setRoomTitle(json.data.title);
+            if (json.data.host) {
+              setRoomHost(json.data.host);
+            }
             setCode(json.data.codeContent || '// Start coding here...\n');
             setSaveStatus('saved');
           }
@@ -183,13 +227,7 @@ export default function CollaborativeRoomPage() {
 
     socket.on('connect', () => {
       setSocketConnected(true);
-      const userPayload = {
-        id: session?.user?.id || `guest-${Math.random().toString(36).substring(2, 6)}`,
-        name: session?.user?.name || 'Guest Developer',
-        image: session?.user?.image || null,
-        color: userColorRef.current,
-      };
-      socket.emit('room:join', { roomKey, user: userPayload });
+      socket.emit('room:join', { roomKey, user: currentUserRef.current });
     });
 
     socket.on('room:init', (data) => {
@@ -207,6 +245,22 @@ export default function CollaborativeRoomPage() {
         if (prev.some((u) => u.socketId === user.socketId)) return prev;
         return [...prev, user];
       });
+    });
+
+    socket.on('user:profile-update', ({ socketId, user, activeUsers }: any) => {
+      if (activeUsers) {
+        setActiveUsers(activeUsers);
+      }
+      if (remoteWidgetsRef.current.has(socketId)) {
+        const widget = remoteWidgetsRef.current.get(socketId);
+        try {
+          const currentPos = widget.getPosition()?.position;
+          if (currentPos) {
+            widget.update(currentPos, user);
+            editorRef.current?.layoutContentWidget(widget);
+          }
+        } catch (e) {}
+      }
     });
 
     socket.on('user:left', ({ socketId }) => {
@@ -325,6 +379,16 @@ export default function CollaborativeRoomPage() {
             console.error('Failed to layout content widget:', e);
           }
         }
+
+        // Layout pass right after Monaco's DOM text update to eliminate cursor lag
+        requestAnimationFrame(() => {
+          if (editorRef.current && remoteWidgetsRef.current.has(socketId)) {
+            const w = remoteWidgetsRef.current.get(socketId);
+            try {
+              editorRef.current.layoutContentWidget(w);
+            } catch (e) {}
+          }
+        });
       }
 
       // 2. Synchronize remote selection highlight (if active)
@@ -445,25 +509,6 @@ export default function CollaborativeRoomPage() {
     setCode(updatedCode);
     setSaveStatus('unsaved');
 
-    if (socketRef.current && socketConnected) {
-      const pos = editorRef.current ? editorRef.current.getPosition() : null;
-      socketRef.current.emit('code:update', {
-        roomKey,
-        codeContent: updatedCode,
-        cursorPosition: pos
-          ? {
-              lineNumber: pos.lineNumber,
-              column: pos.column,
-            }
-          : null,
-        user: {
-          id: session?.user?.id || 'guest',
-          name: session?.user?.name || 'Guest Developer',
-          color: userColorRef.current,
-        },
-      });
-    }
-
     // Debounce cloud database auto-save (2.5s)
     if (autoSaveTimerRef.current) {
       clearTimeout(autoSaveTimerRef.current);
@@ -471,6 +516,24 @@ export default function CollaborativeRoomPage() {
     autoSaveTimerRef.current = setTimeout(() => {
       saveCodeToDb(updatedCode, false);
     }, 2500);
+
+    // Broadcast code update immediately with the accurate cursor position after character insertion
+    queueMicrotask(() => {
+      if (socketRef.current && socketRef.current.connected) {
+        const pos = editorRef.current ? editorRef.current.getPosition() : null;
+        socketRef.current.emit('code:update', {
+          roomKey,
+          codeContent: updatedCode,
+          cursorPosition: pos
+            ? {
+                lineNumber: pos.lineNumber,
+                column: pos.column,
+              }
+            : null,
+          user: currentUserRef.current,
+        });
+      }
+    });
   };
 
   // Download code as .js file export
@@ -812,16 +875,17 @@ export default function CollaborativeRoomPage() {
             <div className="flex items-center -space-x-1.5">
               {activeUsers.map((user, idx) => {
                 const isSpeaking = activeSpeakerSocketId === user.socketId;
+                const isHostUser = roomHost && (user.id === roomHost.id || user.name === roomHost.name);
                 return (
                   <div
                     key={user.socketId || idx}
                     style={{ borderColor: user.color || '#6366f1' }}
-                    className={`w-6 h-6 rounded-full flex items-center justify-center font-mono text-[10px] font-semibold border transition-all ${
+                    className={`w-6 h-6 rounded-full flex items-center justify-center font-mono text-[10px] font-semibold border transition-all relative ${
                       isSpeaking
                         ? 'bg-emerald-950 text-emerald-300 ring-2 ring-emerald-400/50 shadow-[0_0_8px_#10b981]'
                         : 'bg-slate-800 text-slate-200'
                     }`}
-                    title={`${user.name} (Collaborator)`}
+                    title={`${user.name} ${isHostUser ? '(Host / Creator 👑)' : '(Collaborator)'}`}
                   >
                     {user.name.substring(0, 2).toUpperCase()}
                   </div>
@@ -992,11 +1056,7 @@ export default function CollaborativeRoomPage() {
                           endColumn: selection.endColumn,
                         }
                       : null,
-                    user: {
-                      id: session?.user?.id || 'guest',
-                      name: session?.user?.name || 'Guest Developer',
-                      color: userColorRef.current,
-                    },
+                    user: currentUserRef.current,
                   });
                 }
               };

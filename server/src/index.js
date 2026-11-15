@@ -70,11 +70,41 @@ io.on('connection', (socket) => {
     console.log(`[Room: ${roomKey}] User joined: ${userPayload.name} (${socket.id})`);
   });
 
+  // Profile & Identity Update (e.g. session resolution)
+  socket.on('user:profile-update', ({ roomKey, user }) => {
+    const room = rooms.get(roomKey);
+    if (room && room.users.has(socket.id)) {
+      const existing = room.users.get(socket.id);
+      const updated = {
+        ...existing,
+        id: user?.id || existing.id,
+        name: user?.name || existing.name,
+        color: user?.color || existing.color,
+        image: user?.image !== undefined ? user?.image : existing.image,
+      };
+      room.users.set(socket.id, updated);
+      io.to(roomKey).emit('user:profile-update', {
+        socketId: socket.id,
+        user: updated,
+        activeUsers: Array.from(room.users.values()),
+      });
+      console.log(`[Room: ${roomKey}] Profile updated: ${updated.name} (${socket.id})`);
+    }
+  });
+
   // Code Synchronization with atomic cursor position sync
   socket.on('code:update', ({ roomKey, codeContent, cursorPosition, user }) => {
     const room = rooms.get(roomKey);
     if (room) {
       room.codeContent = codeContent;
+      if (user && room.users.has(socket.id)) {
+        const existing = room.users.get(socket.id);
+        room.users.set(socket.id, {
+          ...existing,
+          ...user,
+          socketId: socket.id,
+        });
+      }
       // Broadcast to other peers in the room (excluding sender)
       socket.to(roomKey).emit('code:broadcast', {
         codeContent,
