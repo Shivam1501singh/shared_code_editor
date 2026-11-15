@@ -227,14 +227,13 @@ export default function CollaborativeRoomPage() {
       if (styleEl) styleEl.remove();
     });
 
-    socket.on('code:broadcast', ({ codeContent }) => {
-      isRemoteUpdateRef.current = true;
-      setCode(codeContent);
-      setSaveStatus('saved');
-    });
-
     // Real-Time Collaborator Cursor Tracking via Monaco Native ContentWidgets
-    socket.on('cursor:broadcast', ({ socketId, user, position, selection }) => {
+    const renderRemoteCursor = (
+      socketId: string,
+      user: any,
+      position: { lineNumber: number; column: number } | null,
+      selection: any
+    ) => {
       if (!editorRef.current || !monacoRef.current) return;
       if (socketRef.current && socketId === socketRef.current.id) return;
 
@@ -283,9 +282,8 @@ export default function CollaborativeRoomPage() {
           let currentPosition = { lineNumber: position.lineNumber, column: position.column };
 
           widget = {
-            domNode,
-            caretBar,
-            nameTag,
+            allowEditorOverflow: true,
+            suppressMouseDown: false,
             getId: () => `cursor-widget-${cleanId}`,
             getDomNode: () => domNode,
             getPosition: () => ({
@@ -362,6 +360,33 @@ export default function CollaborativeRoomPage() {
           remoteCursorDecorationsRef.current.delete(socketId);
         }
       }
+    };
+
+    socket.on('code:broadcast', ({ codeContent, cursorPosition, user, senderSocketId }) => {
+      isRemoteUpdateRef.current = true;
+      if (editorRef.current) {
+        const model = editorRef.current.getModel();
+        if (model && model.getValue() !== codeContent) {
+          editorRef.current.executeEdits('remote-peer', [
+            {
+              range: model.getFullModelRange(),
+              text: codeContent,
+              forceMoveMarkers: true,
+            },
+          ]);
+        }
+      }
+      setCode(codeContent);
+      setSaveStatus('saved');
+
+      // Instantly position peer's cursor at the character they just typed!
+      if (cursorPosition && senderSocketId) {
+        renderRemoteCursor(senderSocketId, user, cursorPosition, null);
+      }
+    });
+
+    socket.on('cursor:broadcast', ({ socketId, user, position, selection }) => {
+      renderRemoteCursor(socketId, user, position, selection);
     });
 
     socket.on('voice:speaking', ({ socketId, isSpeaking }) => {
@@ -407,7 +432,22 @@ export default function CollaborativeRoomPage() {
     setSaveStatus('unsaved');
 
     if (socketRef.current && socketConnected) {
-      socketRef.current.emit('code:update', { roomKey, codeContent: updatedCode });
+      const pos = editorRef.current ? editorRef.current.getPosition() : null;
+      socketRef.current.emit('code:update', {
+        roomKey,
+        codeContent: updatedCode,
+        cursorPosition: pos
+          ? {
+              lineNumber: pos.lineNumber,
+              column: pos.column,
+            }
+          : null,
+        user: {
+          id: session?.user?.id || 'guest',
+          name: session?.user?.name || 'Guest Developer',
+          color: userColorRef.current,
+        },
+      });
     }
 
     // Debounce cloud database auto-save (2.5s)
@@ -829,21 +869,14 @@ export default function CollaborativeRoomPage() {
                 emitCursorUpdate(startPos, editor.getSelection());
               }
 
-              // High-frequency 60fps cursor position sync
-              let rafId: number | null = null;
+              // Synchronous immediate cursor position sync on clicks, typing, and arrow navigation
               editor.onDidChangeCursorPosition((e: any) => {
-                if (rafId) cancelAnimationFrame(rafId);
-                rafId = requestAnimationFrame(() => {
-                  emitCursorUpdate(e.position, editor.getSelection());
-                });
+                emitCursorUpdate(e.position, editor.getSelection());
               });
 
-              // Real-time selection sync
+              // Synchronous immediate selection sync on text selection
               editor.onDidChangeCursorSelection((e: any) => {
-                if (rafId) cancelAnimationFrame(rafId);
-                rafId = requestAnimationFrame(() => {
-                  emitCursorUpdate(editor.getPosition(), e.selection);
-                });
+                emitCursorUpdate(editor.getPosition(), e.selection);
               });
             }}
             options={{

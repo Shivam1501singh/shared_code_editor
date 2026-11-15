@@ -70,14 +70,16 @@ io.on('connection', (socket) => {
     console.log(`[Room: ${roomKey}] User joined: ${userPayload.name} (${socket.id})`);
   });
 
-  // Code Synchronization
-  socket.on('code:update', ({ roomKey, codeContent }) => {
+  // Code Synchronization with atomic cursor position sync
+  socket.on('code:update', ({ roomKey, codeContent, cursorPosition, user }) => {
     const room = rooms.get(roomKey);
     if (room) {
       room.codeContent = codeContent;
       // Broadcast to other peers in the room (excluding sender)
       socket.to(roomKey).emit('code:broadcast', {
         codeContent,
+        cursorPosition,
+        user,
         senderSocketId: socket.id,
       });
     }
