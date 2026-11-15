@@ -17,18 +17,32 @@ export default function LandingPage() {
       const params = new URLSearchParams(window.location.search);
       const err = params.get('error');
       if (err) {
+        const lastAttempt = sessionStorage.getItem('syncode_last_provider');
         if (err === 'OAuthAccountNotLinked') {
-          setAuthError('An account with this email was registered with another provider. Account linking has now been enabled—please try signing in with GitHub again!');
-        } else if (err === 'OAuthCallback') {
-          setAuthError('GitHub callback error. Please confirm your GitHub OAuth App Authorization Callback URL is set to http://localhost:3000/api/auth/callback/github');
+          if (lastAttempt === 'github') {
+            setAuthError('An account with this email was registered using Google. Please continue with Google to access your workspace.');
+          } else if (lastAttempt === 'google') {
+            setAuthError('An account with this email was registered using GitHub. Please continue with GitHub to access your workspace.');
+          } else {
+            setAuthError('An account with this email was registered using Google. Please continue with Google to access your workspace.');
+          }
+        } else if (err === 'OAuthCallback' || err === 'Callback') {
+          setAuthError('OAuth authorization callback failed. Please check your OAuth provider settings.');
         } else if (err === 'AccessDenied') {
-          setAuthError('Authorization was cancelled.');
+          setAuthError('Sign-in authorization was cancelled.');
         } else {
           setAuthError(`Authentication note: ${err}`);
         }
       }
     }
   }, []);
+
+  const handleSignIn = (provider: 'github' | 'google') => {
+    if (typeof window !== 'undefined') {
+      sessionStorage.setItem('syncode_last_provider', provider);
+    }
+    signIn(provider, { callbackUrl: '/dashboard' });
+  };
 
   const handleJoinRoom = (e: React.FormEvent) => {
     e.preventDefault();
@@ -150,7 +164,7 @@ export default function LandingPage() {
                 {/* OAuth Buttons */}
                 <div className="flex flex-col gap-3">
                   <button
-                    onClick={() => signIn('github', { callbackUrl: '/dashboard' })}
+                    onClick={() => handleSignIn('github')}
                     className="w-full py-3 px-4 rounded-lg bg-[#313540] hover:bg-[#353944] text-[#dfe2f1] text-sm font-medium flex items-center justify-between transition-all duration-200 active:scale-[0.99] shadow-sm group border border-[#464554]/30"
                   >
                     <div className="flex items-center gap-3">
@@ -163,7 +177,7 @@ export default function LandingPage() {
                   </button>
 
                   <button
-                    onClick={() => signIn('google', { callbackUrl: '/dashboard' })}
+                    onClick={() => handleSignIn('google')}
                     className="w-full py-3 px-4 rounded-lg bg-[#353944] hover:bg-[#313540] text-[#dfe2f1] text-sm font-medium flex items-center justify-between transition-all duration-200 active:scale-[0.99] shadow-sm group border border-[#464554]/30"
                   >
                     <div className="flex items-center gap-3">
