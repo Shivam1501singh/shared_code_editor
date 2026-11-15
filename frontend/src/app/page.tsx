@@ -10,6 +10,25 @@ export default function LandingPage() {
   const router = useRouter();
   const [guestRoomCode, setGuestRoomCode] = useState('');
   const [joinStatus, setJoinStatus] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const err = params.get('error');
+      if (err) {
+        if (err === 'OAuthAccountNotLinked') {
+          setAuthError('An account with this email was registered with another provider. Account linking has now been enabled—please try signing in with GitHub again!');
+        } else if (err === 'OAuthCallback') {
+          setAuthError('GitHub callback error. Please confirm your GitHub OAuth App Authorization Callback URL is set to http://localhost:3000/api/auth/callback/github');
+        } else if (err === 'AccessDenied') {
+          setAuthError('Authorization was cancelled.');
+        } else {
+          setAuthError(`Authentication note: ${err}`);
+        }
+      }
+    }
+  }, []);
 
   const handleJoinRoom = (e: React.FormEvent) => {
     e.preventDefault();
@@ -117,6 +136,16 @@ export default function LandingPage() {
                   <h2 className="text-xl font-semibold text-[#dfe2f1]">Sign in to start coding</h2>
                   <p className="text-xs text-[#c7c4d7] mt-1">Select your developer identity or enter with room key</p>
                 </div>
+
+                {authError && (
+                  <div className="mb-4 p-3 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-200 text-xs flex items-start justify-between gap-2">
+                    <div className="flex items-start gap-2">
+                      <span className="material-symbols-outlined text-[16px] text-amber-400 shrink-0 mt-0.5">warning</span>
+                      <span>{authError}</span>
+                    </div>
+                    <button onClick={() => setAuthError(null)} className="text-amber-400 hover:text-white text-xs">✕</button>
+                  </div>
+                )}
 
                 {/* OAuth Buttons */}
                 <div className="flex flex-col gap-3">
