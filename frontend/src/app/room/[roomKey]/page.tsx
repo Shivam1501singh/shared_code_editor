@@ -1046,7 +1046,7 @@ export default function CollaborativeRoomPage() {
                   <h2 className="font-semibold text-sm tracking-tight text-white flex items-center gap-1.5">
                     Gemini Code Review
                     <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 font-mono">
-                      1.5 Flash
+                      3.5 Flash
                     </span>
                   </h2>
                 </div>
@@ -1112,18 +1112,43 @@ export default function CollaborativeRoomPage() {
                     </div>
                   </div>
 
-                  {/* Detected Issues & Warnings */}
+                  {/* Detected Mistakes & Syntax Issues */}
                   {aiData.errors && aiData.errors.length > 0 && (
-                    <div className="p-3 rounded-lg bg-amber-400/10 border border-amber-400/30 space-y-1.5">
-                      <div className="flex items-center gap-1.5 text-amber-300 font-medium text-[11px]">
-                        <span className="material-symbols-outlined text-[15px]">warning</span>
-                        <span>Potential Edge Cases & Issues</span>
+                    <div className="p-3.5 rounded-lg bg-rose-500/10 border border-rose-500/30 space-y-2">
+                      <div className="flex items-center gap-1.5 text-rose-300 font-semibold text-xs">
+                        <span className="material-symbols-outlined text-[16px]">error</span>
+                        <span>Mistakes & Issues Found ({aiData.errors.length})</span>
                       </div>
-                      {aiData.errors.map((e, idx) => (
-                        <p key={idx} className="text-[11px] text-slate-300 leading-relaxed font-sans">
-                          {e.line ? `Line ${e.line}: ` : ''}{e.message}
-                        </p>
-                      ))}
+                      <div className="space-y-1.5 pt-1">
+                        {aiData.errors.map((e, idx) => (
+                          <div key={idx} className="p-2 rounded bg-rose-950/40 border border-rose-800/40 text-xs">
+                            {e.line && (
+                              <span className="inline-block px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-300 font-mono text-[10px] font-bold mr-1.5">
+                                Line {e.line}
+                              </span>
+                            )}
+                            <span className="text-slate-200 leading-relaxed font-sans">{e.message}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Recommended Fixes & Tips */}
+                  {aiData.optimizationTips && aiData.optimizationTips.length > 0 && (
+                    <div className="p-3.5 rounded-lg bg-indigo-500/10 border border-indigo-500/30 space-y-2">
+                      <div className="flex items-center gap-1.5 text-indigo-300 font-semibold text-xs">
+                        <span className="material-symbols-outlined text-[16px]">lightbulb</span>
+                        <span>Recommended Changes & Fixes</span>
+                      </div>
+                      <ul className="space-y-1.5 pt-1 text-slate-300 text-xs leading-relaxed font-sans">
+                        {aiData.optimizationTips.map((tip, idx) => (
+                          <li key={idx} className="flex items-start gap-2">
+                            <span className="text-indigo-400 font-mono font-bold text-[11px] pt-0.5">•</span>
+                            <span>{tip}</span>
+                          </li>
+                        ))}
+                      </ul>
                     </div>
                   )}
 

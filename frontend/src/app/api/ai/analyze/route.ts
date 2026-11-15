@@ -6,6 +6,9 @@ import { NextResponse } from 'next/server';
 const apiKey = process.env.GEMINI_API_KEY || '';
 const genAI = apiKey ? new GoogleGenerativeAI(apiKey) : null;
 
+// Available candidate models with generateContent support
+const CANDIDATE_MODELS = ['gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.8-flash'];
+
 export async function POST(req: Request) {
   try {
     const session = await getServerSession(authOptions);
@@ -26,41 +29,70 @@ export async function POST(req: Request) {
       );
     }
 
-    const model = genAI.getGenerativeModel({
-      model: 'gemini-1.5-flash',
-      generationConfig: {
-        responseMimeType: 'application/json',
-      },
-    });
-
-    const prompt = `
-You are an expert algorithmic code reviewer and software architect.
-Analyze the following ${language} code and return strict JSON with this exact schema:
+    const prompt = `You are an expert algorithmic code reviewer and software architect.
+Analyze the following ${language} code thoroughly.
+Identify any syntax errors, runtime mistakes (such as using types like 'int' or 'char' in JavaScript, undefined variables, or invalid operations), logical bugs, edge cases, and performance bottlenecks.
+Return strict JSON with this exact schema:
 {
-  "timeComplexity": "e.g. O(n)",
+  "timeComplexity": "e.g. O(n) or O(1)",
   "spaceComplexity": "e.g. O(1)",
   "complexityExplanation": "1-2 sentence concise explanation of why it has this Big-O time and space complexity",
   "errors": [
     {
       "line": 4,
-      "severity": "warning",
-      "message": "description of bug, potential edge case, or syntax issue"
+      "severity": "error",
+      "message": "exact mistake explanation and how to fix it"
     }
   ],
   "optimizationTips": [
-    "Tip 1 on performance or readability",
-    "Tip 2 on algorithm improvement"
+    "Clear actionable step to fix or optimize the code"
   ],
-  "optimizedCode": "clean, refactored, modern ES6+ JavaScript code"
+  "optimizedCode": "clean, fully working, modern ES6+ JavaScript code fixing all mistakes"
 }
 
 Code to analyze:
-${code}
-`;
+${code}`;
 
-    const result = await model.generateContent(prompt);
-    const textResponse = result.response.text();
-    const parsedData = JSON.parse(textResponse);
+    let lastError: any = null;
+    let parsedData = null;
+
+    for (const modelName of CANDIDATE_MODELS) {
+      try {
+        const model = genAI.getGenerativeModel({
+          model: modelName,
+          generationConfig: {
+            responseMimeType: 'application/json',
+          },
+        });
+
+        const result = await model.generateContent(prompt);
+        const textResponse = result.response.text();
+        parsedData = JSON.parse(textResponse);
+        break; // Success!
+      } catch (err: any) {
+        console.warn(`Model ${modelName} failed, trying fallback:`, err?.message);
+        lastError = err;
+      }
+    }
+
+    if (!parsedData) {
+      throw lastError || new Error('All AI review models were unavailable');
+    }
+
+    // Normalize optimizationTips
+    if (typeof parsedData.optimizationTips === 'string') {
+      parsedData.optimizationTips = parsedData.optimizationTips
+        .split('\n')
+        .map((s: string) => s.replace(/^\d+[\.\)]\s*/, '').trim())
+        .filter(Boolean);
+    } else if (!Array.isArray(parsedData.optimizationTips)) {
+      parsedData.optimizationTips = [];
+    }
+
+    // Normalize errors
+    if (!Array.isArray(parsedData.errors)) {
+      parsedData.errors = [];
+    }
 
     return NextResponse.json({
       success: true,
