@@ -17,8 +17,9 @@ server/.env
 frontend/.env
 frontend/.env.local
 
-# Documentation & spec files (kept local only)
+# Documentation & spec files (kept local only, except root README.md)
 *.md
+!README.md
 frontend/**/*.md
 server/**/*.md
 
